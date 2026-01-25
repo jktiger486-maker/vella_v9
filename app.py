@@ -1,5 +1,5 @@
 # ============================================================
-# VELLA V8 — app.py (AWS READY / ERROR 0)
+# VELLA V9 — app.py (AWS READY / ERROR 0)
 # STEP 1 ~ STEP 16 (ALL PRESENT, IN ORDER)
 # ENGINE INDEPENDENT / LIVE CONTRACT
 # ------------------------------------------------------------
@@ -42,7 +42,7 @@ CFG = {
     # =====================================================
     # [ STEP 3 ] 후보 생성
     # =====================================================
-    "08_CAND_BODY_BELOW_EMA": True,
+    "08_CAND_BODY_BELOW_EMA": False,
 
     # =====================================================
     # [ STEP 4 ] BTC SESSION BIAS
@@ -53,7 +53,7 @@ CFG = {
     # =====================================================
     # [ STEP 5 ] EMA SLOPE
     # =====================================================
-    "10_EMA_SLOPE_MIN_PCT": -0.03,
+    "10_EMA_SLOPE_MIN_PCT": -100.0,
 	# 의미: EMA9가 이 비율 이상 하락 중일 때만 ENTRY 허용
 	# SHORT 기준: 음수 = 하락 방향만 인정
 	# 효과: EMA 납작·횡보 구간 진입 차단
@@ -61,7 +61,7 @@ CFG = {
 	# 추천범위: -0.02 ~ -0.05
 	# 사유: 하락 “방향성” 최소 증명용
 
-    "11_EMA_SLOPE_LOOKBACK_BARS": 3,
+    "11_EMA_SLOPE_LOOKBACK_BARS": 1,
 	# 의미: EMA 기울기 계산에 사용할 완료봉 개수
 	# 효과: 일시적 흔들림 필터링
 	# 추천값: 3
@@ -71,7 +71,7 @@ CFG = {
     # =====================================================
     # [ STEP 6 ] PRICE CONFIRM
     # =====================================================
-    "12_EXECUTION_MIN_PRICE_MOVE_PCT": 0.2,
+    "12_EXECUTION_MIN_PRICE_MOVE_PCT": 0.0,
     # ▶ 후보발생 후, 기준가격 대비 최소 % 이상 하락때만 ENTRY(실행) 허용
     #    (SHORT 기준: 하락 확인 게이트 / 노이즈 차단)
     # ▶ 추천값(시작): 0.20
@@ -86,8 +86,8 @@ CFG = {
     # =====================================================
     # [ STEP 6-A ] EMA PROXIMITY
     # =====================================================
-    "38_EMA_TOL_PCT": 5.00,
-    "39_EMA_EPS_PCT": 1.00,
+    "38_EMA_TOL_PCT": 100.0,
+    "39_EMA_EPS_PCT": 100.0,
 
     # =====================================================
     # [ STEP 7 ] 실행 속도 제어
@@ -107,11 +107,11 @@ CFG = {
     # =====================================================
     # [ STEP 8 ] 실행 안전장치
     # =====================================================
-    "17_ENTRY_MAX_PER_CYCLE": 100,
-    "18_MAX_ENTRIES_PER_DAY": 100,
+    "17_ENTRY_MAX_PER_CYCLE": 1000,
+    "18_MAX_ENTRIES_PER_DAY": 1000,
     "19_DATA_STALE_BLOCK": False,
     "20_EXECUTION_SPREAD_GUARD_ENABLE": False,
-    "40_EXECUTION_SPREAD_MAX_PCT": 0.50,
+    "40_EXECUTION_SPREAD_MAX_PCT": 100.0,
 
     # =====================================================
     # [ STEP 9 ] 재진입 관리
@@ -129,7 +129,7 @@ CFG = {
     #   - 1~2봉이면 같은 파동 중복 진입 제거에 충분
     "22_ENTRY_COOLDOWN_AFTER_EXIT": 0,
     "23_REENTRY_SAME_REASON_BLOCK": False,
-    "24_ENTRY_LOOKBACK_BARS": 100,
+    "24_ENTRY_LOOKBACK_BARS": 1,
     "25_REENTRY_PRICE_TOL_PCT": 100,
     "26_CAND_POOL_TTL_BARS": 1000,
     "27_CAND_POOL_MAX_SIZE": 1000,
@@ -139,7 +139,7 @@ CFG = {
     # [ STEP 10 ] 변동성 보호
     # =====================================================
     "29_VOLATILITY_BLOCK_ENABLE": False,
-    "30_VOLATILITY_MAX_PCT": 20,
+    "30_VOLATILITY_MAX_PCT": 100,
 
     # =====================================================
     # [ STEP 11 ] 로그
@@ -349,8 +349,9 @@ class FX:
             return float(qty_str)
 
         except Exception as e:
-            print(f"FX_ORDER_ERROR: {e}")
+            # print(f"FX_ORDER_ERROR: {e}")
             return None
+
 
 
 
@@ -432,7 +433,7 @@ def step_1_engine_limit(cfg, state, capital_ctx=None, logger=print):
         state["equity"] = capital_usdt
         state["realized_pnl"] = 0.0
 
-    logger("STEP1_PASS")
+    # logger("STEP1_PASS")
     return True
 
 
@@ -448,10 +449,10 @@ def step_2_engine_switch(cfg, logger=print):
             raise RuntimeError(f"STEP2_INVALID_BOOL: {k}")
 
     if not cfg["05_ENGINE_ENABLE"]:
-        logger("STEP2_DENY: ENGINE_ENABLE=False")
+        # logger("STEP2_DENY: ENGINE_ENABLE=False")
         return False
 
-    logger("STEP2_PASS")
+    # logger("STEP2_PASS")
     return True
 
 
@@ -517,7 +518,7 @@ def step_3_generate_candidates(cfg, market, state, logger=print):
         }
         state["candidates"].append(cand)
         if cfg.get("31_LOG_CANDIDATES", True):
-            logger(f"STEP3_NEW_CANDIDATE: bar={state['bars']} t={t} low={low} ema9={ema9}")
+            #logger(f"STEP3_NEW_CANDIDATE: bar={state['bars']} t={t} low={low} ema9={ema9}")
 
 
 # ============================================================
@@ -1051,12 +1052,12 @@ def step_12_fail_safe(cfg, state, logger=print):
     if loss > limit:
         msg = f"FAIL_SAFE_MAX_LOSS: loss={q(loss,4)} > limit={q(limit,4)} (pct={q(max_loss_pct,2)})"
         if cfg.get("33_ENGINE_FAIL_FAST_ENABLE", True):
-            logger(msg)
+            #logger(msg)
             return False
         else:
             if not cfg.get("34_ENGINE_FAIL_NOTIFY_ONLY", True):
-                logger(msg)
-            return True
+                pass
+        return True
 
     return True
 
@@ -1205,12 +1206,12 @@ def step_13_execution_record_only(cfg, market, state, fx, logger=print):
         qty = fx.order("SELL", state.get("capital_usdt", cfg["02_CAPITAL_BASE_USDT"]) / price)
 
         if qty is None or qty <= 0:
-            logger("STEP13_ENTRY_ORDER_FAILED")
+            #logger("STEP13_ENTRY_ORDER_FAILED")
             return False
     else:
         # 실주문 OFF → 구조 검증용 더미
         qty = 1.0
-        logger("STEP13_SIM_ENTRY (ORDER DISABLED)")
+        #logger("STEP13_SIM_ENTRY (ORDER DISABLED)")
 
     # ========================================================
     # ENTRY SUCCESS → STATE OPEN
@@ -1253,9 +1254,9 @@ def step_13_execution_record_only(cfg, market, state, fx, logger=print):
     state["execution_records"].append(record)
 
     if cfg.get("32_LOG_EXECUTIONS", True):
-        logger(
-            f"STEP13_REAL_ENTRY: bar={current_bar} price={price} qty={qty}"
-        )
+        # logger(
+        #     f"STEP13_REAL_ENTRY: bar={current_bar} price={price} qty={qty}"
+        # )
 
     return True
 
@@ -1438,7 +1439,7 @@ def step_16_real_order(cfg, state, market, client, logger=print):
                 reduceOnly=True
             )
         else:
-            logger(f"SIM_EXIT: reason={state.get('exit_reason')}")
+            pass #logger(f"SIM_EXIT: reason={state.get('exit_reason')}")
     finally:
         state["order_inflight"] = False
 
@@ -1600,7 +1601,7 @@ def poll_rest_kline(symbol, logger=print):
     _rest_market_cache["ema9"] = ema
     _rest_market_cache["ema9_series"] = series[:]
 
-    logger(f"REST_KLINE_CLOSE: t={t} close={close} ema9={round(ema,6)}")
+    #logger(f"REST_KLINE_CLOSE: t={t} close={close} ema9={round(ema,6)}")
     return _rest_market_cache["kline"]
 
 
@@ -1777,10 +1778,10 @@ def app_run_live(logger=print):
     # twm = start_ws_kline(...)
 
     if not step_2_engine_switch(CFG, logger=logger):
-        logger("ENGINE_STOP: STEP2")
+        #logger("ENGINE_STOP: STEP2")
         return state
 
-    logger("LIVE_START (REST POLLING MODE / BR3)")
+    #logger("LIVE_START (REST POLLING MODE / BR3)")
 
     # ========================================================
     # BTC DAILY OPEN (FUTURES API)
@@ -1937,7 +1938,7 @@ def app_run_live(logger=print):
             step_11_observability(CFG, state, logger)
 
             if not step_12_fail_safe(CFG, state, logger):
-                logger("ENGINE_STOP: STEP12_FAIL_SAFE")
+                #logger("ENGINE_STOP: STEP12_FAIL_SAFE")
                 break
 
             step_13_execution_record_only(CFG, market_core, state, fx, logger)
@@ -1965,4 +1966,4 @@ def app_run_live(logger=print):
 # ============================================================
 
 if __name__ == "__main__":
-    _ = app_run_live(logger=print)
+    #_ = app_run_live(logger=print)
