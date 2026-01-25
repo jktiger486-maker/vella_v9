@@ -1968,4 +1968,5 @@ def app_run_live(logger=print):
 # ============================================================
 
 if __name__ == "__main__":
+        pass
     #_ = app_run_live(logger=print)
