@@ -349,9 +349,8 @@ class FX:
             return float(qty_str)
 
         except Exception as e:
-            # print(f"FX_ORDER_ERROR: {e}")
+            print(f"FX_ORDER_ERROR: {e}")
             return None
-
 
 
 
@@ -433,7 +432,7 @@ def step_1_engine_limit(cfg, state, capital_ctx=None, logger=print):
         state["equity"] = capital_usdt
         state["realized_pnl"] = 0.0
 
-    # logger("STEP1_PASS")
+    logger("STEP1_PASS")
     return True
 
 
@@ -449,10 +448,10 @@ def step_2_engine_switch(cfg, logger=print):
             raise RuntimeError(f"STEP2_INVALID_BOOL: {k}")
 
     if not cfg["05_ENGINE_ENABLE"]:
-        # logger("STEP2_DENY: ENGINE_ENABLE=False")
+        logger("STEP2_DENY: ENGINE_ENABLE=False")
         return False
 
-    # logger("STEP2_PASS")
+    logger("STEP2_PASS")
     return True
 
 
@@ -518,8 +517,7 @@ def step_3_generate_candidates(cfg, market, state, logger=print):
         }
         state["candidates"].append(cand)
         if cfg.get("31_LOG_CANDIDATES", True):
-            pass
-            #logger(f"STEP3_NEW_CANDIDATE: bar={state['bars']} t={t} low={low} ema9={ema9}")
+            logger(f"STEP3_NEW_CANDIDATE: bar={state['bars']} t={t} low={low} ema9={ema9}")
 
 
 # ============================================================
@@ -1053,12 +1051,12 @@ def step_12_fail_safe(cfg, state, logger=print):
     if loss > limit:
         msg = f"FAIL_SAFE_MAX_LOSS: loss={q(loss,4)} > limit={q(limit,4)} (pct={q(max_loss_pct,2)})"
         if cfg.get("33_ENGINE_FAIL_FAST_ENABLE", True):
-            #logger(msg)
+            logger(msg)
             return False
         else:
             if not cfg.get("34_ENGINE_FAIL_NOTIFY_ONLY", True):
-                pass
-        return True
+                logger(msg)
+            return True
 
     return True
 
@@ -1207,12 +1205,12 @@ def step_13_execution_record_only(cfg, market, state, fx, logger=print):
         qty = fx.order("SELL", state.get("capital_usdt", cfg["02_CAPITAL_BASE_USDT"]) / price)
 
         if qty is None or qty <= 0:
-            #logger("STEP13_ENTRY_ORDER_FAILED")
+            logger("STEP13_ENTRY_ORDER_FAILED")
             return False
     else:
         # 실주문 OFF → 구조 검증용 더미
         qty = 1.0
-        #logger("STEP13_SIM_ENTRY (ORDER DISABLED)")
+        logger("STEP13_SIM_ENTRY (ORDER DISABLED)")
 
     # ========================================================
     # ENTRY SUCCESS → STATE OPEN
@@ -1255,10 +1253,9 @@ def step_13_execution_record_only(cfg, market, state, fx, logger=print):
     state["execution_records"].append(record)
 
     if cfg.get("32_LOG_EXECUTIONS", True):
-        pass
-        # logger(
-        #     f"STEP13_REAL_ENTRY: bar={current_bar} price={price} qty={qty}"
-        # )
+        logger(
+            f"STEP13_REAL_ENTRY: bar={current_bar} price={price} qty={qty}"
+        )
 
     return True
 
@@ -1441,7 +1438,7 @@ def step_16_real_order(cfg, state, market, client, logger=print):
                 reduceOnly=True
             )
         else:
-            pass #logger(f"SIM_EXIT: reason={state.get('exit_reason')}")
+            logger(f"SIM_EXIT: reason={state.get('exit_reason')}")
     finally:
         state["order_inflight"] = False
 
@@ -1603,7 +1600,7 @@ def poll_rest_kline(symbol, logger=print):
     _rest_market_cache["ema9"] = ema
     _rest_market_cache["ema9_series"] = series[:]
 
-    #logger(f"REST_KLINE_CLOSE: t={t} close={close} ema9={round(ema,6)}")
+    logger(f"REST_KLINE_CLOSE: t={t} close={close} ema9={round(ema,6)}")
     return _rest_market_cache["kline"]
 
 
@@ -1780,10 +1777,10 @@ def app_run_live(logger=print):
     # twm = start_ws_kline(...)
 
     if not step_2_engine_switch(CFG, logger=logger):
-        #logger("ENGINE_STOP: STEP2")
+        logger("ENGINE_STOP: STEP2")
         return state
 
-    #logger("LIVE_START (REST POLLING MODE / BR3)")
+    logger("LIVE_START (REST POLLING MODE / BR3)")
 
     # ========================================================
     # BTC DAILY OPEN (FUTURES API)
@@ -1940,7 +1937,7 @@ def app_run_live(logger=print):
             step_11_observability(CFG, state, logger)
 
             if not step_12_fail_safe(CFG, state, logger):
-                #logger("ENGINE_STOP: STEP12_FAIL_SAFE")
+                logger("ENGINE_STOP: STEP12_FAIL_SAFE")
                 break
 
             step_13_execution_record_only(CFG, market_core, state, fx, logger)
@@ -1968,5 +1965,4 @@ def app_run_live(logger=print):
 # ============================================================
 
 if __name__ == "__main__":
-        pass
-    #_ = app_run_live(logger=print)
+    _ = app_run_live(logger=print)
