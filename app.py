@@ -1255,6 +1255,7 @@ def step_13_execution_record_only(cfg, market, state, fx, logger=print):
     state["execution_records"].append(record)
 
     if cfg.get("32_LOG_EXECUTIONS", True):
+        pass
         # logger(
         #     f"STEP13_REAL_ENTRY: bar={current_bar} price={price} qty={qty}"
         # )
