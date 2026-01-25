@@ -518,6 +518,7 @@ def step_3_generate_candidates(cfg, market, state, logger=print):
         }
         state["candidates"].append(cand)
         if cfg.get("31_LOG_CANDIDATES", True):
+            pass
             #logger(f"STEP3_NEW_CANDIDATE: bar={state['bars']} t={t} low={low} ema9={ema9}")
 
 
