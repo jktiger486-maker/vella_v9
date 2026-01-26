@@ -20,6 +20,25 @@ import pandas as pd
 
 
 # ============================================================
+# LOG RATE LIMITER (GLOBAL / ENGINE-SAFE)
+# - 의미/로직/STEP 불변
+# - 출력 빈도만 제어
+# ============================================================
+
+_last_log_ts = {}
+def rate_limited_print(msg, key="__default__", interval=5.0):
+    now = time.time()
+    last = _last_log_ts.get(key, 0)
+    if now - last >= interval:
+        print(msg)
+        _last_log_ts[key] = now
+
+def log(msg):
+    rate_limited_print(msg, key="__default__", interval=5.0)
+
+
+
+# ============================================================
 # CFG (01 ~ 40 FULL) — VELLA V8 BASELINE (FREEZE)
 # ============================================================
 
@@ -1965,4 +1984,4 @@ def app_run_live(logger=print):
 # ============================================================
 
 if __name__ == "__main__":
-    _ = app_run_live(logger=print)
+    _ = app_run_live(logger=log)
