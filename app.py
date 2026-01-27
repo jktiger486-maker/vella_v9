@@ -43,6 +43,7 @@ CFG = {
     # [ STEP 3 ] 후보 생성
     # =====================================================
     "08_CAND_BODY_BELOW_EMA": True,
+    # EMA9 아래서 숏, 건딜지 말것.
 
     # =====================================================
     # [ STEP 4 ] BTC SESSION BIAS
@@ -377,23 +378,25 @@ def step_1_engine_limit(cfg, state, capital_ctx=None, logger=print):
     if not isinstance(max_loss_pct, (int, float)) or float(max_loss_pct) < 0:
         raise RuntimeError("STEP1_INVALID_CAPITAL_MAX_LOSS_PCT")
 
-    # CAPITAL USE (fixed / dynamic)
-    capital_usdt = float(base)
-    if not cfg["03_CAPITAL_USE_FIXED"]:
-        # dynamic capital (live only): capital_ctx["available_usdt"] if provided
-        if capital_ctx and isinstance(capital_ctx.get("available_usdt"), (int, float)):
-            capital_usdt = max(0.0, float(capital_ctx["available_usdt"]))
-
-    state["capital_usdt"] = capital_usdt
-
-    # 최초 1회: equity 초기화
+    # =====================================================
+    # 🔒 STEP1 INIT — 최초 1회만 실행 (TIME AXIS CONTRACT)
+    # =====================================================
     if state.get("initial_equity") is None:
+        # CAPITAL USE (fixed / dynamic)
+        capital_usdt = float(base)
+        if not cfg["03_CAPITAL_USE_FIXED"]:
+            if capital_ctx and isinstance(capital_ctx.get("available_usdt"), (int, float)):
+                capital_usdt = max(0.0, float(capital_ctx["available_usdt"]))
+
+        state["capital_usdt"] = capital_usdt
         state["initial_equity"] = capital_usdt
         state["equity"] = capital_usdt
         state["realized_pnl"] = 0.0
 
-    logger("STEP1_PASS")
+        logger("STEP1_PASS")  # ✅ 최초 1회만 출력
+
     return True
+
 
 
 # ============================================================
