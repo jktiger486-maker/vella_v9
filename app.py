@@ -20,25 +20,6 @@ import pandas as pd
 
 
 # ============================================================
-# LOG RATE LIMITER (GLOBAL / ENGINE-SAFE)
-# - 의미/로직/STEP 불변
-# - 출력 빈도만 제어
-# ============================================================
-
-_last_log_ts = {}
-def rate_limited_print(msg, key="__default__", interval=5.0):
-    now = time.time()
-    last = _last_log_ts.get(key, 0)
-    if now - last >= interval:
-        print(msg)
-        _last_log_ts[key] = now
-
-def log(msg):
-    rate_limited_print(msg, key="__default__", interval=5.0)
-
-
-
-# ============================================================
 # CFG (01 ~ 40 FULL) — VELLA V8 BASELINE (FREEZE)
 # ============================================================
 
@@ -61,94 +42,54 @@ CFG = {
     # =====================================================
     # [ STEP 3 ] 후보 생성
     # =====================================================
-    "08_CAND_BODY_BELOW_EMA": False,
+    "08_CAND_BODY_BELOW_EMA": True,
 
     # =====================================================
     # [ STEP 4 ] BTC SESSION BIAS
     # =====================================================
     "09_BTC_SESSION_BIAS_ENABLE": False,
-    # 의미: BTC 마이너스 일때 숏 들어가라
 
     # =====================================================
     # [ STEP 5 ] EMA SLOPE
     # =====================================================
     "10_EMA_SLOPE_MIN_PCT": -100.0,
-	# 의미: EMA9가 이 비율 이상 하락 중일 때만 ENTRY 허용
-	# SHORT 기준: 음수 = 하락 방향만 인정
-	# 효과: EMA 납작·횡보 구간 진입 차단
-	# 추천값: -0.03
-	# 추천범위: -0.02 ~ -0.05
-	# 사유: 하락 “방향성” 최소 증명용
-
-    "11_EMA_SLOPE_LOOKBACK_BARS": 1,
-	# 의미: EMA 기울기 계산에 사용할 완료봉 개수
-	# 효과: 일시적 흔들림 필터링
-	# 추천값: 3
-	# 추천범위: 2 ~ 4
-	# 사유: 5분봉 기준 안정/반응 균형
+    "11_EMA_SLOPE_LOOKBACK_BARS": 0,
 
     # =====================================================
     # [ STEP 6 ] PRICE CONFIRM
     # =====================================================
     "12_EXECUTION_MIN_PRICE_MOVE_PCT": 0.0,
-    # ▶ 후보발생 후, 기준가격 대비 최소 % 이상 하락때만 ENTRY(실행) 허용
-    #    (SHORT 기준: 하락 확인 게이트 / 노이즈 차단)
-    # ▶ 추천값(시작): 0.20
-    # ▶ 추천범위:
-    #    - 0.10 ~ 0.15 : 약하게 닫기 (진입 조금만 줄고, 노이즈 일부만 제거)
-    #    - 0.20 ~ 0.30 : 표준(권고) (의미 있는 하락만 남김, 데이터 해석 가장 깔끔)
-    #    - 0.40 ~ 0.60 : 강하게 닫기 (진입 크게 감소, 추세 구간만 남음)
-    # ▶ 이유: 실제 하방 움직임이 '숫자로 증명'된 뒤에만 들어가게" 만들어
-    #         이후 성과 변화가 이 게이트 효과로만 해석되게 함.
     "13_EXECUTION_ONLY_ON_NEW_LOW": False,
 
     # =====================================================
     # [ STEP 6-A ] EMA PROXIMITY
     # =====================================================
-    "38_EMA_TOL_PCT": 100.0,
-    "39_EMA_EPS_PCT": 100.0,
+    "38_EMA_TOL_PCT": 5.00,
+    "39_EMA_EPS_PCT": 1.00,
 
     # =====================================================
     # [ STEP 7 ] 실행 속도 제어
     # =====================================================
-    "14_STATE_COOLDOWN_ENABLE": True,
-    # 의미: ENTRY 후 일정 봉 수 동안 신규 ENTRY 차단
-    # 효과:
-    #   - 동일 환경에서 연속 숏 방지
-    #   - 데이터 독립성 확보 (통계 오염 차단)
-    # 추천값(의미 있는 데이터 수집 시): True
-    # 사유:
-    #   - 월클 데이터는 “같은 환경에서 1~2번만 진입”
-    #   - 연속 진입은 전략 성과가 아니라 ‘가격 흔들림’ 기록일 뿐
+    "14_STATE_COOLDOWN_ENABLE": False,
     "15_COOLDOWN_RANGE_BARS": 0,
     "16_COOLDOWN_TREND_BARS": 0,
 
     # =====================================================
     # [ STEP 8 ] 실행 안전장치
     # =====================================================
-    "17_ENTRY_MAX_PER_CYCLE": 1000,
-    "18_MAX_ENTRIES_PER_DAY": 1000,
+    "17_ENTRY_MAX_PER_CYCLE": 100,
+    "18_MAX_ENTRIES_PER_DAY": 100,
     "19_DATA_STALE_BLOCK": False,
     "20_EXECUTION_SPREAD_GUARD_ENABLE": False,
-    "40_EXECUTION_SPREAD_MAX_PCT": 100.0,
+    "40_EXECUTION_SPREAD_MAX_PCT": 0.50,
 
     # =====================================================
     # [ STEP 9 ] 재진입 관리
     # =====================================================
     "21_ENTRY_COOLDOWN_BARS": 0,
-    # 의미: ENTRY 발생 후 강제 대기할 봉 수
-    # 효과:
-    #   - 숏 난사 차단
-    #   - 한 방향 움직임을 하나의 샘플로 취급
-    # 추천값:
-    #   - 1 ~ 2 : 데이터 정제용 (권고)
-    #   - 0     : 실험/로그 수집용
-    # 사유:
-    #   - 5분봉 기준
-    #   - 1~2봉이면 같은 파동 중복 진입 제거에 충분
     "22_ENTRY_COOLDOWN_AFTER_EXIT": 0,
     "23_REENTRY_SAME_REASON_BLOCK": False,
-    "24_ENTRY_LOOKBACK_BARS": 1,
+    "24_ENTRY_LOOKBACK_BARS": 100,
     "25_REENTRY_PRICE_TOL_PCT": 100,
     "26_CAND_POOL_TTL_BARS": 1000,
     "27_CAND_POOL_MAX_SIZE": 1000,
@@ -158,7 +99,7 @@ CFG = {
     # [ STEP 10 ] 변동성 보호
     # =====================================================
     "29_VOLATILITY_BLOCK_ENABLE": False,
-    "30_VOLATILITY_MAX_PCT": 100,
+    "30_VOLATILITY_MAX_PCT": 20,
 
     # =====================================================
     # [ STEP 11 ] 로그
@@ -525,14 +466,6 @@ def step_3_generate_candidates(cfg, market, state, logger=print):
             "trigger_price": low,
             "ema9": ema9,
             "reason": "EMA9_PENETRATION",
-
-
-            # - 생성된 봉 + 다음 봉 1개까지만 ENTRY 재료
-            # - 그 이후에는 후보가 존재해도 ENTRY 불가
-            "valid_from_bar": int(state.get("bars", 0)),
-            "valid_to_bar": int(state.get("bars", 0)) + 1,
-
-
         }
         state["candidates"].append(cand)
         if cfg.get("31_LOG_CANDIDATES", True):
@@ -669,49 +602,6 @@ def step_6_entry_judge(cfg, market, state, logger=print):
         state["entry_bar"] = None
         state["entry_reason"] = "NO_CANDIDATE"
         return False
-
-
-
-
-    # ========================================================
-    # [추가] 후보 시간 계약 검사 (핵심 수정)
-    # --------------------------------------------------------
-    # ✅ 위치 고정: "후보 존재 확인" 직후, "MARKET 검사" 이전
-    # 이유:
-    # - 후보가 시간적으로 만료면, 이후 EMA/거리/CFG12/13 계산은 의미 없음
-    # - EMA 위에서 엔트리 들어오는 '유령 후보'를 구조적으로 차단
-    # ========================================================
-    last_cand = candidates[-1]           # 가장 최근 후보
-    now_bar = int(state.get("bars", 0))  # 현재 처리 중인 완료봉 bar
-
-    # STEP 3에서 정의된 계약
-    vf = last_cand.get("valid_from_bar")
-    vt = last_cand.get("valid_to_bar")
-
-    # --------------------------------------------------------
-    # 하위 호환 처리 (구버전 후보 보정)
-    # --------------------------------------------------------
-    if vf is None or vt is None:
-        cb = last_cand.get("bar")
-        if cb is None:
-            state["entry_ready"] = False
-            state["entry_bar"] = None
-            state["entry_reason"] = "CANDIDATE_INVALID"
-            return False
-
-        # 구버전 후보 보정: 생성 봉 + 다음 봉 1개까지만 허용
-        vf = int(cb)
-        vt = int(cb) + 1
-
-    # --------------------------------------------------------
-    # 시간 계약을 벗어난 후보면 ENTRY 차단
-    # --------------------------------------------------------
-    if not (int(vf) <= now_bar <= int(vt)):
-        state["entry_ready"] = False
-        state["entry_bar"] = None
-        state["entry_reason"] = "CANDIDATE_EXPIRED"
-        return False
-
 
     # ---- MARKET ----
     if market is None:
@@ -1389,22 +1279,21 @@ def step_15_exit_judge(cfg, state, market, logger=print):
         state["exit_reason"] = None
         return False
 
-	# --------------------------------------------------------
-	# [C] BASE / TRAIL EXIT — 2봉 평균 vs 현재가
-	#      BASE : trailing_active False
-	#      TRAIL: trailing_active True
-	# --------------------------------------------------------
+    # --------------------------------------------------------
+    # [C] BASE / TRAIL EXIT — 3봉 평균 vs 현재가
+    #      BASE: trailing_active False
+    #      TRAIL: trailing_active True
+    # --------------------------------------------------------
     closes = _rest_market_cache.get("closes") or []
-    if len(closes) >= 2:
-        avg2 = (closes[-1] + closes[-2]) / 2.0
+    if len(closes) >= 3:
+        avg3 = (closes[-1] + closes[-2] + closes[-3]) / 3.0
 
-        # SHORT 기준: 현재가가 직전 2개 완료봉 평균 위로 올라오면 EXIT
-        if price > avg2:
+        # SHORT 기준: 현재가가 3봉 평균 위로 올라오면 EXIT
+        if price > avg3:
             state["exit_ready"] = True
             state["exit_signal"] = "TRAIL" if state.get("trailing_active", False) else "BASE"
-            state["exit_reason"] = "EXIT_2BAR_AVG_CLOSE"
+            state["exit_reason"] = "EXIT_3BAR_AVG_CLOSE"
             return True
-
 
     # --------------------------------------------------------
     # EXIT 조건 미충족
@@ -1591,19 +1480,12 @@ def poll_rest_kline(symbol, logger=print):
         series[:] = series[-50:]
 
     # --------------------------------------------------------
-    # CLOSE BUFFER (VOLATILITY / EXIT BASE — BAR ALIGNED)
+    # CLOSE BUFFER (VOLATILITY ONLY)
     # --------------------------------------------------------
     closes = _rest_market_cache["closes"]
-
-    last_kline = _rest_market_cache.get("kline")
-    last_t = last_kline.get("time") if last_kline else None
-
-    # ✅ 새로운 완료봉일 때만 append
-    if last_t != t:
-        closes.append(close)
-        if len(closes) > 50:
-            closes[:] = closes[-50:]
-
+    closes.append(close)
+    if len(closes) > 50:
+        closes[:] = closes[-50:]
 
     # --------------------------------------------------------
     # REST MARKET CACHE (SINGLE SOURCE)
@@ -1984,4 +1866,4 @@ def app_run_live(logger=print):
 # ============================================================
 
 if __name__ == "__main__":
-    _ = app_run_live(logger=log)
+    _ = app_run_live(logger=print)
