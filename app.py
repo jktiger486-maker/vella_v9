@@ -1362,19 +1362,21 @@ def step_15_exit_judge(cfg, state, market, logger=print):
         return False
 
     # --------------------------------------------------------
-    # [C] BASE / TRAIL EXIT — 3봉 평균 vs 현재가
+    # [C] BASE / TRAIL EXIT — 2봉 평균 vs 현재가
     #      BASE: trailing_active False
     #      TRAIL: trailing_active True
     # --------------------------------------------------------
     closes = _rest_market_cache.get("closes") or []
-    if len(closes) >= 3:
-        avg3 = (closes[-1] + closes[-2] + closes[-3]) / 3.0
+    if len(closes) >= 2:
+        avg2 = (closes[-1] + closes[-2]) / 2.0
 
-        # SHORT 기준: 현재가가 3봉 평균 위로 올라오면 EXIT
-        if price > avg3:
+        # SHORT 기준: 현재가가 2봉 평균 위로 올라오면 EXIT
+        if price > avg2:
             state["exit_ready"] = True
-            state["exit_signal"] = "TRAIL" if state.get("trailing_active", False) else "BASE"
-            state["exit_reason"] = "EXIT_3BAR_AVG_CLOSE"
+            state["exit_signal"] = (
+                "TRAIL" if state.get("trailing_active", False) else "BASE"
+            )
+            state["exit_reason"] = "EXIT_2BAR_AVG_CLOSE"
             return True
 
     # --------------------------------------------------------
