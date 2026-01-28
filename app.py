@@ -120,6 +120,14 @@ CFG = {
     # - “들어가면 EXIT까지” 구조 강제 (수익화 안정화 핵심)
 
     "18_MAX_ENTRIES_PER_DAY": 100,
+    # 지금은 건드리지 않음 (매매 안되는 착시/불안 방지)
+    # 추천 범위: 4 ~ 8
+    # 권장값: 6
+    # 이유:
+    # - 일일 과매매 차단
+    # - 손익 곡선 안정화
+    # - 노이즈/엔진 리스크 감소
+
     "19_DATA_STALE_BLOCK": False,
     "20_EXECUTION_SPREAD_GUARD_ENABLE": False,
     "40_EXECUTION_SPREAD_MAX_PCT": 0.50,
@@ -139,7 +147,13 @@ CFG = {
     #  - 5분봉 기준
     #  - 1~2봉이면 같은 파동 중복 진입 제거에 충분
 
-    "22_ENTRY_COOLDOWN_AFTER_EXIT": 0,
+    "22_ENTRY_COOLDOWN_AFTER_EXIT": 1,
+    # 추천 범위: 1 ~ 2
+    # 권장값: 1
+    # 이유:
+    # - 청산 직후 즉시 재진입(휩쏘)만 1차로 차단
+    # 10:00봉에서 EXIT/10:05봉 끝날때까지 재진입금지/10:05봉 종료후→정상엔트리 재개
+
     "23_REENTRY_SAME_REASON_BLOCK": False,
     "24_ENTRY_LOOKBACK_BARS": 100,
 	# 의미: 재진입 판단 시 과거를 몇 봉까지 볼 것인가
