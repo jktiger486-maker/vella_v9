@@ -300,6 +300,7 @@ def init_state():
         # position (TIME AXIS STATE)
         "position": None,
         "position_open_bar": None,
+        "position_open_time": None,   # ✅ TIME AXIS (explicit key)    
 
         # ---- LIVE / EXIT CONTRACT (EXPLICIT) ----
         "capital_usdt": None,          # STEP1 sets
@@ -1249,6 +1250,9 @@ def step_13_execution_record_only(cfg, market, state, fx, logger=print):
     state["position_open_bar"] = current_bar
     state["entry_price"] = price
 
+    # ✅ [PATCH] TIME AXIS — SAME BAR EXIT BLOCK 기준
+    state["position_open_time"] = market.get("time")
+
     # ✅ 추가 (이 한 줄이 핵심)
     state["position_qty"] = qty
 
@@ -1359,16 +1363,20 @@ def step_15_exit_judge(cfg, state, market, logger=print):
     if market is None:
         return False
 
-    # 동일 bar entry/exit 금지 (OPEN bar에서는 EXIT 판정 금지)
-    pob = state.get("position_open_bar")
-    if pob is not None and state.get("bars", 0) <= int(pob):
+    # 동일 완료봉 entry/exit 금지 (bars ❌, time ⭕)
+    pot = state.get("position_open_time")
+    cur_t = market.get("t")  # ✅ 여기만 수정
+
+    if pot is not None and cur_t is not None and int(cur_t) == int(pot):
         state["exit_ready"] = False
-        state["exit_reason"] = None
+        state["exit_reason"] = "SAME_BAR_EXIT_BLOCK"
         state["exit_signal"] = None
         state["exit_confirm_count"] = 0
         state["exit_fired_bar"] = None
         state["exit_fired_signal"] = None
         return False
+
+
 
     price = _safe_float(market.get("close"))
     if price is None:
