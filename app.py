@@ -681,18 +681,18 @@ def step_5_ema_slope_gate(cfg, ema_ctx, state, logger=print):
         return False
 
     slope_pct = (ema_now - ema_prev) / ema_prev * 100.0
+    min_pct = float(cfg.get("10_EMA_SLOPE_MIN_PCT", 0.0))
 
     # ========================================================
     # SHORT 기준 slope 판정
     # ========================================================
-    if min_pct <= 0:
-        ok = (slope_pct <= 0)
-    else:
-        ok = (slope_pct <= -abs(min_pct))
+    ok = (slope_pct <= -abs(min_pct))
 
     state["gate_ok"] = bool(ok)
     state["gate_reason"] = f"EMA_SLOPE_OK={ok} slope_pct={q(slope_pct,4)}"
     return bool(ok)
+
+
 
 # ============================================================
 # [ STEP 6 ] ENTRY JUDGEMENT (LIVE CONTRACT / ORDER SLOT ONLY)
@@ -748,7 +748,7 @@ def step_6_entry_judge(cfg, market, state, logger=print):
         raise RuntimeError("CFG_MISSING_KEY_STEP6_EMA_PROXIMITY")
 
     tol = ema9 * (float(cfg["38_EMA_TOL_PCT"]) / 100.0)
-    eps = ema9 * float(cfg["39_EMA_EPS_PCT"])
+    eps = ema9 * (cfg["39_EMA_EPS_PCT"] / 100.0)
     band = tol + eps
 
     if abs(q(close,6) - q(ema9,6)) > q(band,6):
@@ -765,7 +765,7 @@ def step_6_entry_judge(cfg, market, state, logger=print):
         last_cand = candidates[-1]
         ref = _safe_float(last_cand.get("trigger_price"))
         if ref and ref > 0:
-            move_pct = abs(close - ref) / ref * 100.0
+            move_pct = (ref - close) / ref * 100.0
             if move_pct < min_move_pct:
                 state["entry_ready"] = False
                 state["entry_bar"] = None
@@ -1366,7 +1366,7 @@ def step_15_exit_judge(cfg, state, market, logger=print):
 
     # 동일 완료봉 entry/exit 금지 (bars ❌, time ⭕)
     pot = state.get("position_open_time")
-    cur_t = market.get("t")  # ✅ 여기만 수정
+    cur_t = market.get("time")  # ✅ 여기만 수정
 
     if pot is not None and cur_t is not None and int(cur_t) == int(pot):
         state["exit_ready"] = False
