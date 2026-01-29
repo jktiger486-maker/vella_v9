@@ -54,7 +54,7 @@ CFG = {
     # =====================================================
     # [ STEP 5 ] EMA SLOPE
     # =====================================================
-    "10_EMA_SLOPE_MIN_PCT": -100.0,
+    "10_EMA_SLOPE_MIN_PCT": -0.008,
 	# 의미: EMA9가 이 비율 이상 하락 중일 때만 ENTRY 허용
 	# SHORT 기준: 음수 = 하락 방향만 인정
 	# 효과: EMA 납작·횡보 구간 진입 차단
@@ -1407,6 +1407,19 @@ def step_15_exit_judge(cfg, state, market, logger=print):
         state["exit_signal"] = None
         state["exit_reason"] = None
         return False
+    
+
+    # --------------------------------------------------------
+    # [C-0] TRAILING STOP EXIT — TP 이후 전용 (SHORT)
+    # --------------------------------------------------------
+    if state.get("trailing_active", False) and tr is not None:
+        # SHORT 기준: 가격이 trailing_stop 위로 올라오면 EXIT
+        if price >= tr:
+            state["exit_ready"] = True
+            state["exit_signal"] = "TRAIL"
+            state["exit_reason"] = "EXIT_TRAILING_STOP"
+            return True
+
 
     # --------------------------------------------------------
     # [C] BASE / TRAIL EXIT — 2봉 평균 vs 현재가
