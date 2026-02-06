@@ -18,24 +18,24 @@ CFG = {
     "03_CAPITAL_MAX_LOSS_PCT": 100.0,
 
     # EXIT
-    "10_SL_PCT": 5.00,          # 손절 거의 안 걸리게
-    "11_TP_PCT": 0.10,          # 아주 쉽게 TP 이벤트 발생
+    "10_SL_PCT": 5.00,
+    "11_TP_PCT": 0.10,
     "12_TP_PARTIAL_PCT": 0.50,
-    "13_EXIT_AVG_N": 1,         # 바로 평균 비교
+    "13_EXIT_AVG_N": 1,
 
     # CANDIDATE
-    "20_CAND_POOL_TTL_BARS": 1000,  # TTL 사실상 무한
+    "20_CAND_POOL_TTL_BARS": 1000,
     "21_CAND_POOL_MAX_SIZE": 50,
-    "22_CAND_FAIL_MAX": 1000,       # fail 카운트 무력화
+    "22_CAND_FAIL_MAX": 1000,
 
-    # GATES — 전부 개방
-    "30_BTC_SESSION_BIAS": False,   # BTC 세션 무시
+    # GATES
+    "30_BTC_SESSION_BIAS": False,
     "31_EMA_SLOPE_LOOKBACK_BARS": 0,
-    "32_EMA_SLOPE_MIN_PCT": 999.0,  # 슬로프 조건 무력화
-    "33_VOLATILITY_MAX_PCT": 999.0, # 변동성 제한 해제
-    "34_EXECUTION_MIN_PRICE_MOVE_PCT": 0.0,  # 미세 움직임도 허용
+    "32_EMA_SLOPE_MIN_PCT": 999.0,
+    "33_VOLATILITY_MAX_PCT": 999.0,
+    "34_EXECUTION_MIN_PRICE_MOVE_PCT": 0.0,
     "35_EXECUTION_ONLY_ON_NEW_LOW": False,
-    "36_EMA_EPS_PCT": 100.0,        # EMA 이격 제한 해제
+    "36_EMA_EPS_PCT": 100.0,
 }
 
 # ============================================================
@@ -351,6 +351,7 @@ def stage_exit_sl(client, symbol, position, close, lot_size):
     return False
 
 def stage_exit_tp_event(client, symbol, position, close, bar, lot_size):
+    # FIX: TP는 부분익절 이벤트만 수행, 전량 청산은 FINAL EXIT 전용
     if position["tp_triggered"]:
         return position
     tp_pct = CFG["11_TP_PCT"] / 100
@@ -362,7 +363,7 @@ def stage_exit_tp_event(client, symbol, position, close, bar, lot_size):
         
         if partial_qty is None:
             logger.error(f"tp: partial_qty < minQty")
-            return None
+            return position
         
         try:
             client.futures_create_order(
@@ -375,18 +376,43 @@ def stage_exit_tp_event(client, symbol, position, close, bar, lot_size):
             position["tp_triggered"] = True
             position["tp_bar"] = bar
             
-            min_qty = float(lot_size["minQty"])
-            if position["qty_remaining"] < min_qty:
-                return None
-            
         except Exception as e:
             logger.error(f"tp: {e}")
     return position
 
 def stage_exit_final(client, symbol, position, close_history, bar, lot_size):
+    # FIX: TP 발생 동일 bar에서 FINAL EXIT 평가 금지
     if position["tp_bar"] is not None and position["tp_bar"] == bar:
         return False
     
+    # FIX: TP 이후 잔여 물량 확정 청산 - close > avg 단일 규칙
+    if position["tp_triggered"]:
+        n = CFG["13_EXIT_AVG_N"]
+        if len(close_history) < n:
+            return False
+        avg = sum(close_history[-n:]) / n
+        current = close_history[-1]
+        if current > avg:
+            qty_remaining = position["qty_remaining"]
+            min_qty = float(lot_size["minQty"])
+            
+            if qty_remaining < min_qty:
+                logger.error(f"final_exit: qty_remaining < minQty")
+                return True
+            
+            try:
+                client.futures_create_order(
+                    symbol=symbol,
+                    side=SIDE_BUY,
+                    type=FUTURE_ORDER_TYPE_MARKET,
+                    quantity=qty_remaining
+                )
+                return True
+            except Exception as e:
+                logger.error(f"final_exit: {e}")
+                return False
+    
+    # FIX: TP 미발생 상태에서도 동일 규칙 적용
     n = CFG["13_EXIT_AVG_N"]
     if len(close_history) < n:
         return False
@@ -463,6 +489,8 @@ def engine():
                 continue
             
             ema_history.append(ema)
+            if len(ema_history) > 20:
+                ema_history = ema_history[-20:]
             
             btc_daily_open = get_btc_daily_open()
             btc_current = get_btc_current()
@@ -494,12 +522,10 @@ def engine():
                     position = None
                     continue
                 
-                result = stage_exit_tp_event(client, symbol, position, close, bar, lot_size)
-                if result is None:
-                    position = None
-                    continue
-                position = result
+                # FIX: TP는 부분익절만, position=None 처리 제거
+                position = stage_exit_tp_event(client, symbol, position, close, bar, lot_size)
                 
+                # FIX: FINAL EXIT가 잔여 물량 전량 청산 전담
                 if stage_exit_final(client, symbol, position, close_history, bar, lot_size):
                     position = None
                     continue
