@@ -21,7 +21,7 @@ CFG = {
     "10_SL_PCT": 5.00,
     "11_TP_PCT": 0.10,
     "12_TP_PARTIAL_PCT": 0.50,
-    "13_EXIT_AVG_N": 1,
+    "13_EXIT_AVG_N": 2,
 
     # CANDIDATE
     "20_CAND_POOL_TTL_BARS": 1000,
@@ -333,16 +333,19 @@ def stage_exit_sl(client, symbol, position, close, lot_size):
         qty_remaining = position["qty_remaining"]
         min_qty = float(lot_size["minQty"])
         
+        # FIX: minQty 미만 시 경고만 출력, position 종료 처리 금지
         if qty_remaining < min_qty:
-            logger.error(f"sl: qty_remaining < minQty")
-            return True
+            logger.error(f"sl: qty_remaining {qty_remaining} < minQty {min_qty}, cannot close")
+            return False
         
         try:
+            # FIX: 숏 청산 시 reduceOnly=True 강제
             client.futures_create_order(
                 symbol=symbol,
                 side=SIDE_BUY,
                 type=FUTURE_ORDER_TYPE_MARKET,
-                quantity=qty_remaining
+                quantity=qty_remaining,
+                reduceOnly=True
             )
             return True
         except Exception as e:
@@ -351,7 +354,6 @@ def stage_exit_sl(client, symbol, position, close, lot_size):
     return False
 
 def stage_exit_tp_event(client, symbol, position, close, bar, lot_size):
-    # FIX: TP는 부분익절 이벤트만 수행, 전량 청산은 FINAL EXIT 전용
     if position["tp_triggered"]:
         return position
     tp_pct = CFG["11_TP_PCT"] / 100
@@ -366,11 +368,13 @@ def stage_exit_tp_event(client, symbol, position, close, bar, lot_size):
             return position
         
         try:
+            # FIX: 숏 청산 시 reduceOnly=True 강제
             client.futures_create_order(
                 symbol=symbol,
                 side=SIDE_BUY,
                 type=FUTURE_ORDER_TYPE_MARKET,
-                quantity=partial_qty
+                quantity=partial_qty,
+                reduceOnly=True
             )
             position["qty_remaining"] -= partial_qty
             position["tp_triggered"] = True
@@ -381,11 +385,9 @@ def stage_exit_tp_event(client, symbol, position, close, bar, lot_size):
     return position
 
 def stage_exit_final(client, symbol, position, close_history, bar, lot_size):
-    # FIX: TP 발생 동일 bar에서 FINAL EXIT 평가 금지
     if position["tp_bar"] is not None and position["tp_bar"] == bar:
         return False
     
-    # FIX: TP 이후 잔여 물량 확정 청산 - close > avg 단일 규칙
     if position["tp_triggered"]:
         n = CFG["13_EXIT_AVG_N"]
         if len(close_history) < n:
@@ -396,23 +398,25 @@ def stage_exit_final(client, symbol, position, close_history, bar, lot_size):
             qty_remaining = position["qty_remaining"]
             min_qty = float(lot_size["minQty"])
             
+            # FIX: minQty 미만 시 경고만 출력, position 종료 처리 금지
             if qty_remaining < min_qty:
-                logger.error(f"final_exit: qty_remaining < minQty")
-                return True
+                logger.error(f"final_exit: qty_remaining {qty_remaining} < minQty {min_qty}, cannot close")
+                return False
             
             try:
+                # FIX: 숏 청산 시 reduceOnly=True 강제
                 client.futures_create_order(
                     symbol=symbol,
                     side=SIDE_BUY,
                     type=FUTURE_ORDER_TYPE_MARKET,
-                    quantity=qty_remaining
+                    quantity=qty_remaining,
+                    reduceOnly=True
                 )
                 return True
             except Exception as e:
                 logger.error(f"final_exit: {e}")
                 return False
     
-    # FIX: TP 미발생 상태에서도 동일 규칙 적용
     n = CFG["13_EXIT_AVG_N"]
     if len(close_history) < n:
         return False
@@ -422,16 +426,19 @@ def stage_exit_final(client, symbol, position, close_history, bar, lot_size):
         qty_remaining = position["qty_remaining"]
         min_qty = float(lot_size["minQty"])
         
+        # FIX: minQty 미만 시 경고만 출력, position 종료 처리 금지
         if qty_remaining < min_qty:
-            logger.error(f"final_exit: qty_remaining < minQty")
-            return True
+            logger.error(f"final_exit: qty_remaining {qty_remaining} < minQty {min_qty}, cannot close")
+            return False
         
         try:
+            # FIX: 숏 청산 시 reduceOnly=True 강제
             client.futures_create_order(
                 symbol=symbol,
                 side=SIDE_BUY,
                 type=FUTURE_ORDER_TYPE_MARKET,
-                quantity=qty_remaining
+                quantity=qty_remaining,
+                reduceOnly=True
             )
             return True
         except Exception as e:
@@ -522,10 +529,8 @@ def engine():
                     position = None
                     continue
                 
-                # FIX: TP는 부분익절만, position=None 처리 제거
                 position = stage_exit_tp_event(client, symbol, position, close, bar, lot_size)
                 
-                # FIX: FINAL EXIT가 잔여 물량 전량 청산 전담
                 if stage_exit_final(client, symbol, position, close_history, bar, lot_size):
                     position = None
                     continue
