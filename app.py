@@ -11,6 +11,7 @@ import requests
 # ============================================================
 # CFG — USER CONTROL PANEL (TOP OF FILE / FINAL)
 # ============================================================
+#20260208_1000 > 30번 btc 게이트 작동여부 확인중
 
 CFG = {
     "01_TRADE_SYMBOL": "SUIUSDT",
@@ -18,23 +19,38 @@ CFG = {
     "03_CAPITAL_MAX_LOSS_PCT": 100.0,
 
     # EXIT
-    "10_SL_PCT": 5.00,
-    "11_TP_PCT": 0.18,
-    "12_TP_PARTIAL_PCT": 0.35,
-    "13_EXIT_AVG_N": 3,
+    "10_SL_PCT": 3.00,   # 20260208  >  당분간 고정    
+    "11_TP_PCT": 0.45,    # 🔼 0.35 → 0.45 (수수료+슬리피지 고려 후 순수익 확보)
+    # 0.25 ~ 0.35가 현실적
+    "12_TP_PARTIAL_PCT": 0.50,  # 20260208  >  당분간 고정
+    # 0.3 ~ 0.5 구간은 월클 영역
+    "13_EXIT_AVG_N": 2,
 
     # CANDIDATE
     "20_CAND_POOL_TTL_BARS": 1000,
     "21_CAND_POOL_MAX_SIZE": 50,
     "22_CAND_FAIL_MAX": 1000,
 
-    # GATES
-    "30_BTC_SESSION_BIAS": False,
+    # GATES  ############ # 20260208  > 34 : 0.15, 30: true
+
+    # 1차 게이트: 비트코인 시장 환경
+    "30_BTC_SESSION_BIAS": True,
+
+    # 2차 게이트: 한 묶음 횡보장 / 미세 흔들림 차단 > 추후 31 : 5, 32 : 0.03
     "31_EMA_SLOPE_LOOKBACK_BARS": 0,
     "32_EMA_SLOPE_MIN_PCT": 999.0,
+
+    # 3차 게이트: 급등락, 뉴스빔 차단 > 추후 33 > 5
     "33_VOLATILITY_MAX_PCT": 999.0,
-    "34_EXECUTION_MIN_PRICE_MOVE_PCT": 0.1,
+    # 변동성이 5% 넘게 미쳐 날뛰면 일단 멈춰
+
+    # 4차 게이트:
+    "34_EXECUTION_MIN_PRICE_MOVE_PCT": 0.15, # 🔼 0.1 → 0.15 (의미 없는 틱띠기 방지)
+    
+    # 망이 아니라 규칙 : “돌파 포함 추세추종”이면 False가 맞음
     "35_EXECUTION_ONLY_ON_NEW_LOW": False,
+
+    # 사실상 OFF, 우선순위 없음
     "36_EMA_EPS_PCT": 100.0,
 }
 
