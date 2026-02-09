@@ -15,7 +15,7 @@ import requests
 #20260209_0800 > 30번 BTC 게이트 오프, 31(3), 32(0.02), 34(0.15) 사용
 
 CFG = {
-    "01_TRADE_SYMBOL": "API3USDT",
+    "01_TRADE_SYMBOL": "DUSKUSDT",
     "02_CAPITAL_BASE_USDT": 30,
     "03_CAPITAL_MAX_LOSS_PCT": 100.0,
 
@@ -379,27 +379,27 @@ def stage_entry(client, symbol, capital, lot_size):
         return None
 
 # ============================================================
-# STAGE 5 — EXIT
+# STAGE 5 — EXIT (PATCHED)
 # ============================================================
 
 def stage_exit_sl(client, symbol, position, close, lot_size):
     sl_pct = CFG["10_SL_PCT"] / 100
     if close >= position["entry_price"] * (1 + sl_pct):
         qty_remaining = position["qty_remaining"]
-        min_qty = float(lot_size["minQty"])
         
-        # FIX: minQty 미만 시 경고만 출력, position 종료 처리 금지
-        if qty_remaining < min_qty:
-            logger.error(f"sl: qty_remaining {qty_remaining} < minQty {min_qty}, cannot close")
+        # PATCH: Precision 보장을 위해 calculate_quantity() 재통과
+        qty_to_order = calculate_quantity(qty_remaining, lot_size)
+        
+        if qty_to_order is None:
+            logger.error(f"sl: qty_remaining {qty_remaining} failed precision check, cannot close")
             return False
         
         try:
-            # FIX: 숏 청산 시 reduceOnly=True 강제
             client.futures_create_order(
                 symbol=symbol,
                 side=SIDE_BUY,
                 type=FUTURE_ORDER_TYPE_MARKET,
-                quantity=qty_remaining,
+                quantity=qty_to_order,  # ← CHANGED: raw float 대신 정제된 값 사용
                 reduceOnly=True
             )
             return True
@@ -423,7 +423,6 @@ def stage_exit_tp_event(client, symbol, position, close, bar, lot_size):
             return position
         
         try:
-            # FIX: 숏 청산 시 reduceOnly=True 강제
             client.futures_create_order(
                 symbol=symbol,
                 side=SIDE_BUY,
@@ -451,20 +450,20 @@ def stage_exit_final(client, symbol, position, close_history, bar, lot_size):
         current = close_history[-1]
         if current > avg:
             qty_remaining = position["qty_remaining"]
-            min_qty = float(lot_size["minQty"])
             
-            # FIX: minQty 미만 시 경고만 출력, position 종료 처리 금지
-            if qty_remaining < min_qty:
-                logger.error(f"final_exit: qty_remaining {qty_remaining} < minQty {min_qty}, cannot close")
+            # PATCH: TP 이후 float 오염된 qty_remaining을 precision 보정
+            qty_to_order = calculate_quantity(qty_remaining, lot_size)
+            
+            if qty_to_order is None:
+                logger.error(f"final_exit: qty_remaining {qty_remaining} failed precision check, cannot close")
                 return False
             
             try:
-                # FIX: 숏 청산 시 reduceOnly=True 강제
                 client.futures_create_order(
                     symbol=symbol,
                     side=SIDE_BUY,
                     type=FUTURE_ORDER_TYPE_MARKET,
-                    quantity=qty_remaining,
+                    quantity=qty_to_order,  # ← CHANGED: raw float 대신 정제된 값 사용
                     reduceOnly=True
                 )
                 return True
@@ -479,20 +478,20 @@ def stage_exit_final(client, symbol, position, close_history, bar, lot_size):
     current = close_history[-1]
     if current > avg:
         qty_remaining = position["qty_remaining"]
-        min_qty = float(lot_size["minQty"])
         
-        # FIX: minQty 미만 시 경고만 출력, position 종료 처리 금지
-        if qty_remaining < min_qty:
-            logger.error(f"final_exit: qty_remaining {qty_remaining} < minQty {min_qty}, cannot close")
+        # PATCH: TP 없어도 초기 qty float 오염 방지용 precision 보정
+        qty_to_order = calculate_quantity(qty_remaining, lot_size)
+        
+        if qty_to_order is None:
+            logger.error(f"final_exit: qty_remaining {qty_remaining} failed precision check, cannot close")
             return False
         
         try:
-            # FIX: 숏 청산 시 reduceOnly=True 강제
             client.futures_create_order(
                 symbol=symbol,
                 side=SIDE_BUY,
                 type=FUTURE_ORDER_TYPE_MARKET,
-                quantity=qty_remaining,
+                quantity=qty_to_order,  # ← CHANGED: raw float 대신 정제된 값 사용
                 reduceOnly=True
             )
             return True
