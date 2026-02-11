@@ -23,6 +23,12 @@ from typing import Optional, Dict, Any, List
 # 20260211      : Step1~3 이식 — slope PCT / exec min move / confirm bars
 # 20260211      : 죽은 CFG 13~16 제거 / logger 이름 수정 / confirm_bars TTL 버그 수정
 # 20260211_0930 : 매매 확인 우선, 이후 22번 0>1 19번 0>0.1
+# 20260211_1210 : 벨라 세팅
+# - 추세 시작 첫 음봉 거의 다 잡음
+# - 눌림 후 재하락도 재진입
+# - slope 완화로 초입 빠르게 탑승
+# - exit 3봉 평균으로 수익 조금 더 끌고 감
+# - SL 1.2%로 큰 역추세 방어))
 
 CFG = {
     # -------------------------
@@ -39,15 +45,16 @@ CFG = {
     # - trigger: close < EMA_FAST
     # - 1-shot per trend cycle
     # -------------------------
-    "10_EMA_FAST": 10,
-    "11_EMA_MID": 15,
+    "10_EMA_FAST": 9,
+    "11_EMA_MID": 14,
     "12_EMA_SLOW": 20,
+    # 이유: 10/15/20보다 약간 빠르게 민감도 상승
 
     # -------------------------
     # ENTRY FILTER — STEP 1: EMA Slope PCT (횡보장 차단)
     # -------------------------
-    "17_SLOPE_PCT_BARS": 5,       # 기울기 계산 기준 봉수
-    "18_SLOPE_PCT_MIN": 0.03,     # EMA_FAST 하락 기울기 최소 % (0=OFF / 권고: 0.02~0.05)
+    "17_SLOPE_PCT_BARS": 3,       # 기울기 계산 기준 봉수
+    "18_SLOPE_PCT_MIN": 0.012,     # EMA_FAST 하락 기울기 최소 % (0=OFF / 권고: 0.02~0.05)
     # 의미: EMA_FAST가 과거 N봉 대비 이 % 이상 하락해야 하방 추세로 인정
     # 0.02 → 미세꺾임 통과 위험 / 0.03 → 권고 / 0.05 → 강추세만
 
@@ -65,7 +72,7 @@ CFG = {
     # ENTRY MANAGEMENT FILTERS (plug-in slots)
     # -------------------------
     "20_ENTRY_COOLDOWN_BARS": 0,     # 엔트리/엑시트 후 재진입 쿨다운(봉수)
-    "21_MAX_ENTRY_PER_TREND": 2,     # 추세 사이클당 최대 진입 횟수 (벨라 권고: 2)
+    "21_MAX_ENTRY_PER_TREND": 3,     # 추세 사이클당 최대 진입 횟수 (벨라 권고: 2)
 
     # -------------------------
     # ENTRY FILTER — STEP 3: Confirm Bars (시그널 후 N봉 확인)
@@ -78,14 +85,15 @@ CFG = {
     # -------------------------
     # EXIT (Bella SHORT)
     # -------------------------
-    "30_EXIT_AVG_N": 2,
+    "30_EXIT_AVG_N": 3,
     "31_EXIT_USE_PREV_N_ONLY": True,
 
     # -------------------------
     # EXIT OPTIONS (plug-in slots; default OFF)
     # -------------------------
-    "40_SL_ENABLE": False,
-    "41_SL_PCT": 2.0,
+    "40_SL_ENABLE": True,
+    "41_SL_PCT": 1.2,
+    # BR 5m 기준 1.0~1.5 적정
 
     "50_TIMEOUT_EXIT_ENABLE": False,
     "51_TIMEOUT_BARS": 60,
@@ -94,7 +102,7 @@ CFG = {
     # ENGINE
     # -------------------------
     "90_KLINE_LIMIT": 240,
-    "91_POLL_SEC": 7,
+    "91_POLL_SEC": 5,
     "92_LOG_LEVEL": "INFO",
 }
 
