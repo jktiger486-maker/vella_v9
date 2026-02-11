@@ -53,8 +53,8 @@ CFG = {
     # -------------------------
     # ENTRY FILTER — STEP 1: EMA Slope PCT (횡보장 차단)
     # -------------------------
-    "17_SLOPE_PCT_BARS": 3,       # 기울기 계산 기준 봉수
-    "18_SLOPE_PCT_MIN": 0.012,     # EMA_FAST 하락 기울기 최소 % (0=OFF / 권고: 0.02~0.05)
+    "17_SLOPE_PCT_BARS": 2,       # 기울기 계산 기준 봉수
+    "18_SLOPE_PCT_MIN": 0.02,     # EMA_FAST 하락 기울기 최소 % (0=OFF / 권고: 0.02~0.05)
     # 의미: EMA_FAST가 과거 N봉 대비 이 % 이상 하락해야 하방 추세로 인정
     # 0.02 → 미세꺾임 통과 위험 / 0.03 → 권고 / 0.05 → 강추세만
 
@@ -345,7 +345,7 @@ def short_entry_signal(
         return False
 
     # 기본 트리거
-    raw_signal = close < ema_fast
+    raw_signal = (close < ema_fast) and (closes[-1] < closes[-2])
     if not raw_signal:
         return False
 
