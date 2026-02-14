@@ -1,8 +1,8 @@
 # ============================================================
 # VELLA_v9 — SHORT ENGINE (Binance Futures)
 # - EXECUTION CORE: based on v7 proven trade plumbing (lotSize/qty/order/reduceOnly/closed-bar loop)
-# - ENTRY: EMA_FAST < EMA_MID < EMA_SLOW (하방 정렬) + close < EMA_FAST (1-shot per trend cycle)
-# - EXIT: Bella rule SHORT (close > avg(prev N closed closes))  [default N=2, CFG adjustable]
+# - ENTRY: EMA_FAST < EMA_MID < EMA_SLOW (하방 정렬) + EMA cross (1-shot per trend cycle)
+# - EXIT: close > EMA_MID
 # - TIME AXIS: REST closed-bar only (kline[-2])
 # ============================================================
 
@@ -29,12 +29,13 @@ from typing import Optional, Dict, Any, List
 # - slope 완화로 초입 빠르게 탑승
 # - exit 3봉 평균으로 수익 조금 더 끌고 감
 # - SL 1.2%로 큰 역추세 방어))
+# 20260215_BASE : 순수 EMA 교차 엣지 검증 1탄
 
 CFG = {
     # -------------------------
     # BASIC
     # -------------------------
-    "01_TRADE_SYMBOL": "BRUSDT",
+    "01_TRADE_SYMBOL": "SEIUSDT",
     "02_INTERVAL": "5m",
     "03_CAPITAL_BASE_USDT": 30.0,
     "04_LEVERAGE": 1,
@@ -42,7 +43,7 @@ CFG = {
     # -------------------------
     # ENTRY (v9 SHORT)
     # - stack: EMA_FAST < EMA_MID < EMA_SLOW
-    # - trigger: close < EMA_FAST
+    # - trigger: EMA cross
     # - 1-shot per trend cycle
     # -------------------------
     "10_EMA_FAST": 9,
@@ -54,7 +55,7 @@ CFG = {
     # ENTRY FILTER — STEP 1: EMA Slope PCT (횡보장 차단)
     # -------------------------
     "17_SLOPE_PCT_BARS": 2,       # 기울기 계산 기준 봉수
-    "18_SLOPE_PCT_MIN": 0.02,     # EMA_FAST 하락 기울기 최소 % (0=OFF / 권고: 0.02~0.05)
+    "18_SLOPE_PCT_MIN": 0.00,     # EMA_FAST 하락 기울기 최소 % (0=OFF / 권고: 0.02~0.05)
     # 의미: EMA_FAST가 과거 N봉 대비 이 % 이상 하락해야 하방 추세로 인정
     # 0.02 → 미세꺾임 통과 위험 / 0.03 → 권고 / 0.05 → 강추세만
 
@@ -72,7 +73,7 @@ CFG = {
     # ENTRY MANAGEMENT FILTERS (plug-in slots)
     # -------------------------
     "20_ENTRY_COOLDOWN_BARS": 0,     # 엔트리/엑시트 후 재진입 쿨다운(봉수)
-    "21_MAX_ENTRY_PER_TREND": 3,     # 추세 사이클당 최대 진입 횟수 (벨라 권고: 2)
+    "21_MAX_ENTRY_PER_TREND": 999,     # 추세 사이클당 최대 진입 횟수 (벨라 권고: 2)
 
     # -------------------------
     # ENTRY FILTER — STEP 3: Confirm Bars (시그널 후 N봉 확인)
@@ -81,12 +82,6 @@ CFG = {
     # 0이면 즉시 진입(기존 동작 유지)
     # ENTRY_COOLDOWN_BARS + MAX_ENTRY_PER_TREND 동시 사용
     # 둘 다 >0 이면, 재진입 기회 이중 차단
-
-    # -------------------------
-    # EXIT (Bella SHORT)
-    # -------------------------
-    "30_EXIT_AVG_N": 3,
-    "31_EXIT_USE_PREV_N_ONLY": True,
 
     # -------------------------
     # EXIT OPTIONS (plug-in slots; default OFF)
@@ -101,7 +96,7 @@ CFG = {
     # -------------------------
     # ENGINE
     # -------------------------
-    "90_KLINE_LIMIT": 240,
+    "90_KLINE_LIMIT": 1500,
     "91_POLL_SEC": 5,
     "92_LOG_LEVEL": "INFO",
 }
@@ -115,7 +110,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("VELLA_v9_SHORT")  # [수정] v8 → v9
+log = logging.getLogger("VELLA_v9_SHORT")
 
 # ============================================================
 # BINANCE (v7 style)
@@ -130,7 +125,7 @@ except Exception:
     SIDE_SELL = "SELL"
     ORDER_TYPE_MARKET = "MARKET"
 
-BINANCE_FUTURES_KLINES = "https://fapi.binance.com/fapi/v1/klines"  # futures URL 확인완료
+BINANCE_FUTURES_KLINES = "https://fapi.binance.com/fapi/v1/klines"
 
 def init_client() -> "Client":
     if Client is None:
@@ -217,15 +212,15 @@ def ema_series(values: List[float], period: int) -> List[float]:
 
 @dataclass
 class Position:
-    side: str               # "SHORT"
+    side: str
     entry_price: float
     qty: float
     entry_bar: int
 
 @dataclass
 class ShortEntryState:
-    entry_count: int = 0    # 현재 추세 사이클 내 진입 횟수 (21_MAX_ENTRY_PER_TREND 제어)
-    signal_bar: int = -1    # Step3: 시그널 최초 발생 봉 기록
+    entry_count: int = 0
+    signal_bar: int = -1
 
 from dataclasses import dataclass, field
 
@@ -290,19 +285,15 @@ def filter_confirm_bars(st: ShortEntryState, current_bar: int, raw_signal: bool)
 
     if raw_signal:
         if st.signal_bar < 0:
-            # 새 시그널 최초 등록
             st.signal_bar = current_bar
             return True
         bars_since = current_bar - st.signal_bar
         if bars_since <= confirm_n:
             return True
         else:
-            # TTL 만료 — 완전 리셋, 이번 봉은 새 시그널로 등록하지 않음
-            # [수정] 만료 즉시 재등록 제거 → False 리턴 후 다음 봉에서 새 시그널 등록
             st.signal_bar = -1
             return False
     else:
-        # raw_signal 없는 봉: TTL 초과 시 리셋
         if st.signal_bar >= 0:
             bars_since = current_bar - st.signal_bar
             if bars_since > confirm_n:
@@ -330,34 +321,32 @@ def short_entry_signal(
     ema_slow = ema_slow_s[-1]
     close    = closes[-1]
 
-    # 스택 깨지면 사이클 리셋
     stack_now = (ema_fast < ema_mid) and (ema_mid < ema_slow)
     if not stack_now:
         st.signal_bar = -1
         st.entry_count = 0
         return False
 
-    # 21_MAX_ENTRY_PER_TREND: 추세 사이클 내 최대 진입 횟수 초과 시 차단
     max_entry = int(CFG["21_MAX_ENTRY_PER_TREND"])
     if max_entry <= 0:
         return False
     if st.entry_count >= max_entry:
         return False
 
-    # 기본 트리거
-    raw_signal = (close < ema_fast) and (closes[-1] < closes[-2])
+    raw_signal = (
+        (ema_fast_s[-2] >= ema_mid_s[-2]) and
+        (ema_fast < ema_mid) and
+        (ema_mid < ema_slow)
+    )
     if not raw_signal:
         return False
 
-    # Step1: slope PCT 필터 (숏: 하락 방향)
     if not filter_slope_pct(ema_fast_s):
         return False
 
-    # Step2: exec min move 필터
     if not filter_exec_min_move(close, ema_slow):
         return False
 
-    # Step3: confirm bars 필터
     if not filter_confirm_bars(st, current_bar, raw_signal):
         return False
 
@@ -365,25 +354,11 @@ def short_entry_signal(
 
 def on_entry_executed(st: ShortEntryState) -> None:
     st.signal_bar = -1
-    st.entry_count += 1    # 진입 횟수 카운트 (21_MAX_ENTRY_PER_TREND 추적)
+    st.entry_count += 1
 
 # ============================================================
-# EXIT (Bella SHORT)
+# EXIT (EMA_MID based)
 # ============================================================
-
-def bella_exit_core_avg_break(closes: List[float], n: int) -> bool:
-    n = int(n)
-    if n <= 0:
-        return False
-    if len(closes) < n + 1:
-        return False
-    current = closes[-1]
-    if CFG["31_EXIT_USE_PREV_N_ONLY"]:
-        prev = closes[-(n + 1):-1]
-        avg = sum(prev) / n
-    else:
-        avg = sum(closes[-n:]) / n
-    return current > avg
 
 def exit_option_sl(close: float, entry_price: float) -> bool:
     if not CFG["40_SL_ENABLE"]:
@@ -405,8 +380,10 @@ def exit_signal(state: EngineState) -> bool:
         return True
     if exit_option_timeout(state.bar, pos.entry_bar):
         return True
-    n = int(CFG["30_EXIT_AVG_N"])
-    if bella_exit_core_avg_break(state.close_history, n):
+    ema_mid_s = ema_series(state.close_history, CFG["11_EMA_MID"])
+    ema_mid_now = ema_mid_s[-1]
+    close_now = state.close_history[-1]
+    if close_now > ema_mid_now:
         return True
     return False
 
@@ -495,9 +472,6 @@ def engine():
                 time.sleep(CFG["91_POLL_SEC"])
                 continue
 
-            # ===============================
-            # COLD START SEED (RUN ONCE)
-            # ===============================
             if not st.close_history:
                 for k in kl[:-1]:
                     st.close_history.append(float(k[4]))
@@ -514,9 +488,6 @@ def engine():
             if len(st.close_history) > 2000:
                 st.close_history = st.close_history[-2000:]
 
-            # -------------------------
-            # POSITION LOGIC
-            # -------------------------
             if st.position is None:
                 if st.bar < st.cooldown_until_bar:
                     continue
