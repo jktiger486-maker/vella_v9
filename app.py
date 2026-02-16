@@ -86,7 +86,7 @@ CFG = {
     # -------------------------
     # EXIT OPTIONS (plug-in slots; default OFF)
     # -------------------------
-    "40_SL_ENABLE": True,
+    "40_SL_ENABLE": False,
     "41_SL_PCT": 1.2,
     # BR 5m 기준 1.0~1.5 적정
 
