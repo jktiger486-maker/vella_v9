@@ -1,8 +1,8 @@
 # ============================================================
 # VELLA_v9 — SHORT ENGINE (Binance Futures)
 # - EXECUTION CORE: based on v7 proven trade plumbing (lotSize/qty/order/reduceOnly/closed-bar loop)
-# - ENTRY: EMA_FAST < EMA_MID < EMA_SLOW (하방 정렬) + EMA cross (1-shot per trend cycle)
-# - EXIT: close > EMA_MID
+# - ENTRY: EMA_FAST ↓ EMA_MID (dead cross)
+# - EXIT: close > EMA_EXIT
 # - TIME AXIS: REST closed-bar only (kline[-2])
 # ============================================================
 
@@ -30,6 +30,8 @@ from typing import Optional, Dict, Any, List
 # - exit 3봉 평균으로 수익 조금 더 끌고 감
 # - SL 1.2%로 큰 역추세 방어))
 # 20260215_BASE : 순수 EMA 교차 엣지 검증 1탄
+# 20260217_PURE : EMA_SLOW 제거 / EXIT EMA4 / 필터 OFF 유지
+# 20260217_FIX  : EXIT 후 entry_count 리셋 추가
 
 CFG = {
     # -------------------------
@@ -42,53 +44,43 @@ CFG = {
 
     # -------------------------
     # ENTRY (v9 SHORT)
-    # - stack: EMA_FAST < EMA_MID < EMA_SLOW
-    # - trigger: EMA cross
-    # - 1-shot per trend cycle
+    # - trigger: EMA_FAST ↓ EMA_MID (dead cross)
     # -------------------------
     "10_EMA_FAST": 9,
     "11_EMA_MID": 14,
-    "12_EMA_SLOW": 20,
-    # 이유: 10/15/20보다 약간 빠르게 민감도 상승
 
     # -------------------------
     # ENTRY FILTER — STEP 1: EMA Slope PCT (횡보장 차단)
     # -------------------------
-    "17_SLOPE_PCT_BARS": 2,       # 기울기 계산 기준 봉수
-    "18_SLOPE_PCT_MIN": 0.00,     # EMA_FAST 하락 기울기 최소 % (0=OFF / 권고: 0.02~0.05)
-    # 의미: EMA_FAST가 과거 N봉 대비 이 % 이상 하락해야 하방 추세로 인정
-    # 0.02 → 미세꺾임 통과 위험 / 0.03 → 권고 / 0.05 → 강추세만
+    "17_SLOPE_PCT_BARS": 2,
+    "18_SLOPE_PCT_MIN": 0.00,
 
     # -------------------------
     # ENTRY FILTER — STEP 2: Execution Min Move (추격 진입 차단)
     # -------------------------
-    "19_EXEC_MIN_MOVE_PCT": 0.0,  # 0=OFF / 권고: 0.10~0.20
-    # 0.1~0.2 → 실제로는 꽤 빡셈
-    # 의미: 현재가가 EMA_SLOW 대비 이 % 이내일 때만 진입 허용
-    # 너무 급락한 후 추격 숏 진입 차단용
-    # 값이 클수록 → 추격 진입을 더 강하게 차단
-    # 값이 작을수록 → EMA 근처에서만 진입 허용
+    "19_EXEC_MIN_MOVE_PCT": 0.0,
 
     # -------------------------
     # ENTRY MANAGEMENT FILTERS (plug-in slots)
     # -------------------------
-    "20_ENTRY_COOLDOWN_BARS": 0,     # 엔트리/엑시트 후 재진입 쿨다운(봉수)
-    "21_MAX_ENTRY_PER_TREND": 999,     # 추세 사이클당 최대 진입 횟수 (벨라 권고: 2)
+    "20_ENTRY_COOLDOWN_BARS": 0,
+    "21_MAX_ENTRY_PER_TREND": 999,
 
     # -------------------------
     # ENTRY FILTER — STEP 3: Confirm Bars (시그널 후 N봉 확인)
     # -------------------------
-    "22_CONFIRM_BARS": 0,            # 0=OFF / 시그널 발생 후 N봉 이내 재확인
-    # 0이면 즉시 진입(기존 동작 유지)
-    # ENTRY_COOLDOWN_BARS + MAX_ENTRY_PER_TREND 동시 사용
-    # 둘 다 >0 이면, 재진입 기회 이중 차단
+    "22_CONFIRM_BARS": 0,
+
+    # -------------------------
+    # EXIT
+    # -------------------------
+    "30_EXIT_EMA": 4,
 
     # -------------------------
     # EXIT OPTIONS (plug-in slots; default OFF)
     # -------------------------
     "40_SL_ENABLE": False,
     "41_SL_PCT": 1.2,
-    # BR 5m 기준 1.0~1.5 적정
 
     "50_TIMEOUT_EXIT_ENABLE": False,
     "51_TIMEOUT_BARS": 60,
@@ -259,25 +251,24 @@ def filter_slope_pct(ema_fast_s: List[float]) -> bool:
     slope_pct = ((new - old) / old) * 100
     return slope_pct <= -min_pct
 
-def filter_exec_min_move(close: float, ema_slow: float) -> bool:
+def filter_exec_min_move(close: float, ema_mid: float) -> bool:
     """
     Step2: Execution Min Move 필터 (추격 숏 진입 차단)
     CFG 19_EXEC_MIN_MOVE_PCT == 0 이면 OFF
-    현재가가 EMA_SLOW 대비 이 % 이내일 때만 진입 허용
+    현재가가 EMA_MID 대비 이 % 이내일 때만 진입 허용
     """
     min_move = float(CFG["19_EXEC_MIN_MOVE_PCT"])
     if min_move == 0:
         return True
-    if ema_slow == 0:
+    if ema_mid == 0:
         return False
-    dist_pct = abs((close - ema_slow) / ema_slow) * 100
+    dist_pct = abs((close - ema_mid) / ema_mid) * 100
     return dist_pct <= min_move
 
 def filter_confirm_bars(st: ShortEntryState, current_bar: int, raw_signal: bool) -> bool:
     """
     Step3: Confirm Bars 필터 (시그널 후 N봉 재확인)
     CFG 22_CONFIRM_BARS == 0 이면 OFF (즉시 진입)
-    [수정] TTL 만료 시 signal_bar 갱신 제거 → 완전 리셋 후 새 시그널 대기
     """
     confirm_n = int(CFG["22_CONFIRM_BARS"])
     if confirm_n == 0:
@@ -301,7 +292,7 @@ def filter_confirm_bars(st: ShortEntryState, current_bar: int, raw_signal: bool)
         return False
 
 # ============================================================
-# ENTRY (v9 SHORT + Step1~3)
+# ENTRY (v9 SHORT)
 # ============================================================
 
 def short_entry_signal(
@@ -309,23 +300,14 @@ def short_entry_signal(
     st: ShortEntryState,
     current_bar: int
 ) -> bool:
-    if len(closes) < max(CFG["12_EMA_SLOW"], 60):
+    if len(closes) < max(CFG["11_EMA_MID"], 60):
         return False
 
     ema_fast_s = ema_series(closes, CFG["10_EMA_FAST"])
     ema_mid_s  = ema_series(closes, CFG["11_EMA_MID"])
-    ema_slow_s = ema_series(closes, CFG["12_EMA_SLOW"])
 
-    ema_fast = ema_fast_s[-1]
-    ema_mid  = ema_mid_s[-1]
-    ema_slow = ema_slow_s[-1]
-    close    = closes[-1]
-
-    stack_now = (ema_fast < ema_mid) and (ema_mid < ema_slow)
-    if not stack_now:
-        st.signal_bar = -1
-        st.entry_count = 0
-        return False
+    ema_mid = ema_mid_s[-1]
+    close   = closes[-1]
 
     max_entry = int(CFG["21_MAX_ENTRY_PER_TREND"])
     if max_entry <= 0:
@@ -335,8 +317,7 @@ def short_entry_signal(
 
     raw_signal = (
         (ema_fast_s[-2] >= ema_mid_s[-2]) and
-        (ema_fast < ema_mid) and
-        (ema_mid < ema_slow)
+        (ema_fast_s[-1] < ema_mid_s[-1])
     )
     if not raw_signal:
         return False
@@ -344,7 +325,7 @@ def short_entry_signal(
     if not filter_slope_pct(ema_fast_s):
         return False
 
-    if not filter_exec_min_move(close, ema_slow):
+    if not filter_exec_min_move(close, ema_mid):
         return False
 
     if not filter_confirm_bars(st, current_bar, raw_signal):
@@ -357,7 +338,7 @@ def on_entry_executed(st: ShortEntryState) -> None:
     st.entry_count += 1
 
 # ============================================================
-# EXIT (EMA_MID based)
+# EXIT (EMA_EXIT based)
 # ============================================================
 
 def exit_option_sl(close: float, entry_price: float) -> bool:
@@ -380,10 +361,10 @@ def exit_signal(state: EngineState) -> bool:
         return True
     if exit_option_timeout(state.bar, pos.entry_bar):
         return True
-    ema_mid_s = ema_series(state.close_history, CFG["11_EMA_MID"])
-    ema_mid_now = ema_mid_s[-1]
+    ema_exit_s = ema_series(state.close_history, CFG["30_EXIT_EMA"])
+    ema_exit_now = ema_exit_s[-1]
     close_now = state.close_history[-1]
-    if close_now > ema_mid_now:
+    if close_now > ema_exit_now:
         return True
     return False
 
@@ -518,6 +499,7 @@ def engine():
                     if ok:
                         log.info(f"[EXIT] SHORT close={close} entry={st.position.entry_price} bar={st.bar}")
                         st.position = None
+                        st.entry_state.entry_count = 0
                         cd = int(CFG["20_ENTRY_COOLDOWN_BARS"])
                         if cd > 0:
                             st.cooldown_until_bar = st.bar + cd
