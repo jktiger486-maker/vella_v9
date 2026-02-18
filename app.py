@@ -53,7 +53,7 @@ CFG = {
     # -------------------------
     # ENTRY FILTER — STEP 1: EMA Slope PCT (횡보장 차단)
     # -------------------------
-    "17_SLOPE_PCT_BARS": 2,
+    "17_SLOPE_PCT_BARS": 2,  # 18번과 연계 18번 0이면 off 상태
     "18_SLOPE_PCT_MIN": 0.00,
 
     # -------------------------
@@ -75,7 +75,7 @@ CFG = {
     # -------------------------
     # ENTRY 2 (Re-Acceleration Short) — SLOT ONLY (기본 OFF)
     # -------------------------
-    "23_ENTRY2_ENABLE": False,
+    "23_ENTRY2_ENABLE": True,
 
     # -------------------------
     # EXIT
