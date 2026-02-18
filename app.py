@@ -1,7 +1,8 @@
 # ============================================================
 # VELLA_v9 — SHORT ENGINE (Binance Futures)
 # - EXECUTION CORE: based on v7 proven trade plumbing (lotSize/qty/order/reduceOnly/closed-bar loop)
-# - ENTRY: EMA_FAST ↓ EMA_MID (dead cross)
+# - ENTRY 1: EMA_FAST ↓ EMA_MID (dead cross)
+# - ENTRY 2: EMA9 재이탈 (Re-Acceleration) — SLOT ONLY (기본 OFF)
 # - EXIT: close > EMA_EXIT
 # - TIME AXIS: REST closed-bar only (kline[-2])
 # ============================================================
@@ -32,6 +33,7 @@ from typing import Optional, Dict, Any, List
 # 20260215_BASE : 순수 EMA 교차 엣지 검증 1탄
 # 20260217_PURE : EMA_SLOW 제거 / EXIT EMA4 / 필터 OFF 유지
 # 20260217_FIX  : EXIT 후 entry_count 리셋 추가
+# 20260218_E2   : ENTRY 2 슬롯 추가 (기본 OFF / 벨라팀 확정 구조)
 
 CFG = {
     # -------------------------
@@ -43,8 +45,7 @@ CFG = {
     "04_LEVERAGE": 1,
 
     # -------------------------
-    # ENTRY (v9 SHORT)
-    # - trigger: EMA_FAST ↓ EMA_MID (dead cross)
+    # ENTRY 1 (v9 SHORT — Dead Cross)
     # -------------------------
     "10_EMA_FAST": 9,
     "11_EMA_MID": 14,
@@ -70,6 +71,11 @@ CFG = {
     # ENTRY FILTER — STEP 3: Confirm Bars (시그널 후 N봉 확인)
     # -------------------------
     "22_CONFIRM_BARS": 0,
+
+    # -------------------------
+    # ENTRY 2 (Re-Acceleration Short) — SLOT ONLY (기본 OFF)
+    # -------------------------
+    "23_ENTRY2_ENABLE": False,
 
     # -------------------------
     # EXIT
@@ -208,13 +214,12 @@ class Position:
     entry_price: float
     qty: float
     entry_bar: int
+    entry_type: str = "E1"
 
 @dataclass
 class ShortEntryState:
     entry_count: int = 0
     signal_bar: int = -1
-
-from dataclasses import dataclass, field
 
 @dataclass
 class EngineState:
@@ -292,19 +297,21 @@ def filter_confirm_bars(st: ShortEntryState, current_bar: int, raw_signal: bool)
         return False
 
 # ============================================================
-# ENTRY (v9 SHORT)
+# ENTRY 1 (Dead Cross)
 # ============================================================
 
-def short_entry_signal(
+def short_entry1_signal(
     closes: List[float],
+    ema_fast_s: List[float],
+    ema_mid_s: List[float],
     st: ShortEntryState,
     current_bar: int
 ) -> bool:
+    """
+    ENTRY 1: EMA9 ↓ EMA14 (Dead Cross)
+    """
     if len(closes) < max(CFG["11_EMA_MID"], 60):
         return False
-
-    ema_fast_s = ema_series(closes, CFG["10_EMA_FAST"])
-    ema_mid_s  = ema_series(closes, CFG["11_EMA_MID"])
 
     ema_mid = ema_mid_s[-1]
     close   = closes[-1]
@@ -332,6 +339,47 @@ def short_entry_signal(
         return False
 
     return True
+
+# ============================================================
+# ENTRY 2 (Re-Acceleration) — SLOT ONLY
+# ============================================================
+
+def short_entry2_signal(
+    closes: List[float],
+    ema_fast_s: List[float],
+    ema_mid_s: List[float],
+    st: ShortEntryState
+) -> bool:
+    """
+    ENTRY 2: EMA9 재이탈 (Re-Acceleration Short)
+    전제: EMA9 < EMA14
+    조건: 직전 봉 close > EMA9 AND 현재 봉 close < EMA9
+    """
+    if not CFG["23_ENTRY2_ENABLE"]:
+        return False
+    
+    if len(closes) < 3:
+        return False
+    
+    max_entry = int(CFG["21_MAX_ENTRY_PER_TREND"])
+    if max_entry <= 0:
+        return False
+    if st.entry_count >= max_entry:
+        return False
+    
+    # 전제: 하방 정렬
+    if ema_fast_s[-1] >= ema_mid_s[-1]:
+        return False
+    
+    # 눌림 + 재이탈
+    pullback = closes[-2] > ema_fast_s[-2]
+    reentry  = closes[-1] < ema_fast_s[-1]
+    
+    return pullback and reentry
+
+# ============================================================
+# ENTRY 실행 후 처리
+# ============================================================
 
 def on_entry_executed(st: ShortEntryState) -> None:
     st.signal_bar = -1
@@ -473,8 +521,34 @@ def engine():
                 if st.bar < st.cooldown_until_bar:
                     continue
 
-                sig_entry = short_entry_signal(st.close_history, st.entry_state, st.bar)
-                if sig_entry:
+                # EMA 계산 (루프당 1회, E1/E2 공유)
+                ema_fast_s = ema_series(st.close_history, CFG["10_EMA_FAST"])
+                ema_mid_s  = ema_series(st.close_history, CFG["11_EMA_MID"])
+
+                # ENTRY 1 판정
+                sig_entry1 = short_entry1_signal(
+                    st.close_history,
+                    ema_fast_s,
+                    ema_mid_s,
+                    st.entry_state,
+                    st.bar
+                )
+
+                # ENTRY 2 판정 (E1 우선)
+                sig_entry2 = False
+                entry_type = "E1"
+
+                if not sig_entry1:
+                    sig_entry2 = short_entry2_signal(
+                        st.close_history,
+                        ema_fast_s,
+                        ema_mid_s,
+                        st.entry_state
+                    )
+                    if sig_entry2:
+                        entry_type = "E2"
+
+                if sig_entry1 or sig_entry2:
                     order = place_short_entry(client, symbol, capital, lot)
                     if order:
                         st.position = Position(
@@ -482,12 +556,13 @@ def engine():
                             entry_price=float(order["entry_price"]),
                             qty=float(order["qty"]),
                             entry_bar=st.bar,
+                            entry_type=entry_type
                         )
                         on_entry_executed(st.entry_state)
                         cd = int(CFG["20_ENTRY_COOLDOWN_BARS"])
                         if cd > 0:
                             st.cooldown_until_bar = st.bar + cd
-                        log.info(f"[ENTRY] SHORT qty={st.position.qty} entry={st.position.entry_price} bar={st.bar}")
+                        log.info(f"[ENTRY] SHORT type={entry_type} qty={st.position.qty} entry={st.position.entry_price} bar={st.bar}")
                     else:
                         log.error("[ENTRY_FAIL] order failed")
             else:
@@ -497,7 +572,7 @@ def engine():
                 if exit_signal(st):
                     ok = place_short_exit(client, symbol, st.position.qty, lot)
                     if ok:
-                        log.info(f"[EXIT] SHORT close={close} entry={st.position.entry_price} bar={st.bar}")
+                        log.info(f"[EXIT] SHORT type={st.position.entry_type} close={close} entry={st.position.entry_price} bar={st.bar}")
                         st.position = None
                         st.entry_state.entry_count = 0
                         cd = int(CFG["20_ENTRY_COOLDOWN_BARS"])
