@@ -2,7 +2,7 @@
 # VELLA_v9 — SHORT ENGINE (Binance Futures)
 # - EXECUTION CORE: based on v7 proven trade plumbing (lotSize/qty/order/reduceOnly/closed-bar loop)
 # - ENTRY 1: EMA_FAST ↓ EMA_MID (dead cross)
-# - ENTRY 2: EMA9 재이탈 (Re-Acceleration) — SLOT ONLY (기본 OFF)
+# - ENTRY 2: EMA9 재이탈 (Re-Acceleration) — SLOT ONLY
 # - EXIT: close > EMA_EXIT
 # - TIME AXIS: REST closed-bar only (kline[-2])
 # ============================================================
