@@ -41,14 +41,14 @@ CFG = {
     # -------------------------
     "01_TRADE_SYMBOL": "SEIUSDT",
     "02_INTERVAL": "5m",
-    "03_CAPITAL_BASE_USDT": 30.0,
+    "03_CAPITAL_BASE_USDT": 10.0,
     "04_LEVERAGE": 1,
 
     # -------------------------
     # ENTRY 1 (v9 SHORT — Dead Cross)
     # -------------------------
-    "10_EMA_FAST": 9,
-    "11_EMA_MID": 14,
+    "10_EMA_FAST": 7,
+    "11_EMA_MID": 12,
 
     # -------------------------
     # ENTRY FILTER — STEP 1: EMA Slope PCT (횡보장 차단)
@@ -80,7 +80,7 @@ CFG = {
     # -------------------------
     # EXIT
     # -------------------------
-    "30_EXIT_EMA": 4,
+    "30_EXIT_EMA": 6,
 
     # -------------------------
     # EXIT OPTIONS (plug-in slots; default OFF)
