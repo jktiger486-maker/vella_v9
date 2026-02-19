@@ -65,7 +65,7 @@ CFG = {
     # ENTRY MANAGEMENT FILTERS (plug-in slots)
     # -------------------------
     "20_ENTRY_COOLDOWN_BARS": 0,
-    "21_MAX_ENTRY_PER_TREND": 999,
+    "21_MAX_ENTRY_PER_TREND": 2,
 
     # -------------------------
     # ENTRY FILTER — STEP 3: Confirm Bars (시그널 후 N봉 확인)
