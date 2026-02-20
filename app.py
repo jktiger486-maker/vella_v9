@@ -1,5 +1,5 @@
 # ============================================================
-# VELLA_v9 — SHORT ENGINE (FINAL: 벨라 EXIT 정밀도 강화)
+# VELLA_v9 — SHORT ENGINE (v9.1 FINAL)
 # ============================================================
 
 import os
@@ -8,6 +8,7 @@ import time
 import signal
 import logging
 import requests
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
@@ -25,7 +26,7 @@ CFG = {
     "10_EMA_FAST": 7,
     "11_EMA_MID": 12,
     
-    "17_SLOPE_PCT_BARS": 2,
+    "17_SLOPE_PCT_BARS": 2,   # 18번이 0이면 17번 오프 의미
     "18_SLOPE_PCT_MIN": 0.00,
     
     "19_EXEC_MIN_MOVE_PCT": 0.0,
@@ -121,7 +122,11 @@ def get_futures_lot_size(client: "Client", symbol: str) -> Optional[Dict[str, De
         log.error(f"get_futures_lot_size: {e}")
         return None
 
-def calculate_quantity(qty_raw: float, lot: Dict[str, Decimal]) -> Optional[float]:
+# ============================================================
+# Scientific Notation 수량 오류 수정
+# ============================================================
+def calculate_quantity(qty_raw: float, lot: Dict[str, Decimal]) -> Optional[str]:
+    """수량 계산 - str 반환으로 scientific notation 방지"""
     if lot is None:
         return None
     qty_decimal = Decimal(str(qty_raw))
@@ -132,7 +137,7 @@ def calculate_quantity(qty_raw: float, lot: Dict[str, Decimal]) -> Optional[floa
     if qty > lot["maxQty"]:
         qty = lot["maxQty"]
     precision = abs(step.as_tuple().exponent)
-    return float(qty.quantize(Decimal(10) ** -precision))
+    return f"{qty:.{precision}f}"
 
 # ============================================================
 # INDICATORS
@@ -180,6 +185,9 @@ class EngineState:
     entry_state: ShortEntryState = field(default_factory=ShortEntryState)
     position: Optional[Position] = None
     close_history: List[float] = None
+    daily_open_utc: Optional[float] = None
+    daily_open_date: Optional[str] = None
+    prev_env_state: Optional[bool] = None
 
     def __post_init__(self):
         self.close_history = []
@@ -323,39 +331,31 @@ def on_entry_executed(st: ShortEntryState) -> None:
 # EXIT
 # ============================================================
 
-def exit_signal(state: EngineState, ema_fast_s: List[float], ema_mid_s: List[float]) -> bool:
+def exit_signal(state: EngineState) -> bool:
     pos = state.position
     if pos is None:
         return False
     
     close = state.close_history[-1]
     
-    # SL (CFG OFF 시 무시)
     if CFG["40_SL_ENABLE"]:
         sl = float(CFG["41_SL_PCT"]) / 100.0
         if close >= pos.entry_price * (1.0 + sl):
             log.info(f"[EXIT_SL] close={close} >= SL={pos.entry_price * (1.0 + sl)}")
             return True
     
-    # Timeout (CFG OFF 시 무시)
     if CFG["50_TIMEOUT_EXIT_ENABLE"]:
-        if (state.bar - pos.entry_bar) >= int(CFG["51_TIMEOUT_BARS"]):
-            log.info(f"[EXIT_TIMEOUT] bars={state.bar - pos.entry_bar}")
-            return True
+        if pos.entry_type != "SYNC":
+            if (state.bar - pos.entry_bar) >= int(CFG["51_TIMEOUT_BARS"]):
+                log.info(f"[EXIT_TIMEOUT] bars={state.bar - pos.entry_bar}")
+                return True
     
-    # EMA EXIT
     ema_exit_s = ema_series(state.close_history, CFG["30_EXIT_EMA"])
     ema_exit_now = ema_exit_s[-1]
     
     if close > ema_exit_now:
-        log.info(f"[EXIT_EMA] close={close} > EMA6={ema_exit_now}")
+        log.info(f"[EXIT_EMA] close={close} > EMA5={ema_exit_now}")
         return True
-    
-    # === 벨라 FIX: 골든크로스 발생 시점만 EXIT (정밀도 강화) ===
-    if len(ema_fast_s) >= 2 and len(ema_mid_s) >= 2:
-        if ema_fast_s[-2] < ema_mid_s[-2] and ema_fast_s[-1] >= ema_mid_s[-1]:
-            log.info(f"[EXIT_GOLDEN_CROSS] 골든크로스 발생 (FAST ↑ MID)")
-            return True
     
     return False
 
@@ -370,32 +370,32 @@ def place_short_entry(client: "Client", symbol: str, capital_usdt: float, lot: D
         leverage = int(CFG["04_LEVERAGE"])
         notional = float(capital_usdt) * float(leverage)
         qty_raw = notional / price
-        qty = calculate_quantity(qty_raw, lot)
-        if qty is None:
+        qty_str = calculate_quantity(qty_raw, lot)
+        if qty_str is None:
             log.error("entry: qty calculation failed")
             return None
         client.futures_create_order(
             symbol=symbol,
             side=SIDE_SELL,
             type=ORDER_TYPE_MARKET,
-            quantity=qty,
+            quantity=qty_str,
         )
-        return {"entry_price": price, "qty": qty}
+        return {"entry_price": price, "qty": float(qty_str)}
     except Exception as e:
         log.error(f"place_short_entry: {e}")
         return None
 
 def place_short_exit(client: "Client", symbol: str, qty: float, lot: Dict[str, Decimal]) -> bool:
     try:
-        qty_rounded = calculate_quantity(qty, lot)
-        if qty_rounded is None:
+        qty_str = calculate_quantity(qty, lot)
+        if qty_str is None:
             log.error("exit: qty too small")
             return False
         client.futures_create_order(
             symbol=symbol,
             side=SIDE_BUY,
             type=ORDER_TYPE_MARKET,
-            quantity=qty_rounded,
+            quantity=qty_str,
             reduceOnly=True
         )
         return True
@@ -427,6 +427,24 @@ def engine():
         raise RuntimeError("lot_size retrieval failed")
 
     st = EngineState()
+
+    try:
+        positions = client.futures_position_information(symbol=symbol)
+        for pos in positions:
+            if pos['symbol'] == symbol:
+                position_amt = float(pos['positionAmt'])
+                if position_amt < 0:
+                    st.position = Position(
+                        side="SHORT",
+                        entry_price=float(pos['entryPrice']),
+                        qty=abs(position_amt),
+                        entry_bar=st.bar,
+                        entry_type="SYNC"
+                    )
+                    log.info(f"[SYNC] Existing SHORT position detected: qty={st.position.qty} entry={st.position.entry_price}")
+                    break
+    except Exception as e:
+        log.error(f"position sync failed: {e}")
 
     log.info(f"START v9 SHORT | symbol={symbol} interval={interval} capital={capital} lev={CFG['04_LEVERAGE']}")
 
@@ -460,17 +478,45 @@ def engine():
             if len(st.close_history) > 2000:
                 st.close_history = st.close_history[-2000:]
 
-            # EMA 계산 (루프당 1회, 전역)
+            # ============================================================
+            # === 벨라 FIX: 5분봉 open_time 기반 UTC 날짜 계산 (진짜 캐싱) ===
+            # ============================================================
+            current_utc_date = datetime.fromtimestamp(open_time / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+            
+            # 날짜 변경 시에만 1D API 호출 (하루 1회)
+            if current_utc_date != st.daily_open_date:
+                daily_kl = fetch_klines_futures(symbol, "1d", 2)
+                if daily_kl and len(daily_kl) >= 1:
+                    st.daily_open_utc = float(daily_kl[-1][1])
+                    st.daily_open_date = current_utc_date
+                    log.info(f"[ENV_UPDATE] UTC date changed to {current_utc_date}, daily_open={st.daily_open_utc}")
+            
+            # ENV 계산 (매 루프)
+            ENV_OK = False
+            if st.daily_open_utc is not None:
+                today_return_pct = (close - st.daily_open_utc) / st.daily_open_utc * 100
+                ENV_OK = today_return_pct < 0
+                
+                # ENV 상태 변화 시에만 로그
+                if ENV_OK != st.prev_env_state:
+                    if not ENV_OK:
+                        log.info(f"[ENV_BLOCK] Daily return {today_return_pct:.2f}% >= 0 → SHORT disabled")
+                    else:
+                        log.info(f"[ENV_OK] Daily return {today_return_pct:.2f}% < 0 → SHORT enabled")
+                    st.prev_env_state = ENV_OK
+
             ema_fast_s = ema_series(st.close_history, CFG["10_EMA_FAST"])
             ema_mid_s = ema_series(st.close_history, CFG["11_EMA_MID"])
 
-            # === 트렌드 리셋 (상태 기준: FAST >= MID 유지 중) ===
             if ema_fast_s[-1] >= ema_mid_s[-1]:
                 if st.entry_state.entry_count > 0:
                     log.info(f"[TREND_RESET] 하락 추세 종료 (FAST >= MID) → entry_count 리셋")
                     st.entry_state.entry_count = 0
 
             if st.position is None:
+                if not ENV_OK:
+                    continue
+                
                 if st.bar < st.cooldown_until_bar:
                     continue
 
@@ -516,7 +562,7 @@ def engine():
                 if st.position.entry_bar == st.bar:
                     continue
 
-                if exit_signal(st, ema_fast_s, ema_mid_s):
+                if exit_signal(st):
                     ok = place_short_exit(client, symbol, st.position.qty, lot)
                     if ok:
                         log.info(f"[EXIT] SHORT type={st.position.entry_type} close={close} entry={st.position.entry_price} bar={st.bar}")
