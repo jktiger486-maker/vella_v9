@@ -20,6 +20,7 @@ from collections import deque
 # ============================================================
 # CFG
 # ============================================================
+# 20260305_1400 엔트리 로직 완전 변경
 
 CFG = {
     "01_TRADE_SYMBOL": "SEIUSDT",
@@ -27,8 +28,8 @@ CFG = {
     "03_CAPITAL_BASE_USDT": 10.0,
     "04_LEVERAGE": 1,
 
-    "10_EMA_FAST": 7,
-    "11_EMA_MID": 12,
+    "10_EMA_FAST": 5,
+    "11_EMA_MID": 10,
     "12_EMA_ARENA": 30,
     "13_TOUCH_TOLERANCE": 0.001,
     "14_SLOPE_THRESHOLD": 0.001,
@@ -36,7 +37,7 @@ CFG = {
 
     "23_ENTRY2_ENABLE": True,
 
-    "30_EXIT_EMA": 5,
+    "30_EXIT_EMA": 4,
 
     "40_SL_ENABLE": False,
     "41_SL_PCT": 1.2,
