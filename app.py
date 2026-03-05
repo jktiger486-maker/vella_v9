@@ -1,7 +1,8 @@
 # ============================================================
-# VELLA_v9 — SHORT ENGINE (v9.6)
-# - v10 backtest_short 100% 미러링
-# - OHLC deque(maxlen=2000) / list slicing 제거
+# VELLA_v9 — SHORT ENGINE
+# ENTRY LOGIC FROZEN / EXIT ONLY CHANGED
+# - EXIT: ema_exit_fast > ema_exit_mid 즉시 청산
+# - OHLC deque(maxlen=2000)
 # - QTY_STR_FIX: qty str 통일
 # ============================================================
 
@@ -11,7 +12,6 @@ import time
 import signal
 import logging
 import requests
-from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Deque
@@ -20,14 +20,16 @@ from collections import deque
 # ============================================================
 # CFG
 # ============================================================
-# 20260305_1400 엔트리 로직 완전 변경
+# 20260305_1400 엔트리 EMA5 < EMA30,  1) EMA5 ↓ EMA10, 2) EMA5 재이탈 (Re-Acceleration)
+# 20260305_1500 엑시트만 달리 EMA 5 > EMA8
 
 CFG = {
-    "01_TRADE_SYMBOL": "SEIUSDT",
+    "01_TRADE_SYMBOL": "SUIUSDT",
     "02_INTERVAL": "5m",
     "03_CAPITAL_BASE_USDT": 10.0,
     "04_LEVERAGE": 1,
 
+    # ---- ENTRY EMA (FROZEN) ----
     "10_EMA_FAST": 5,
     "11_EMA_MID": 10,
     "12_EMA_ARENA": 30,
@@ -37,7 +39,9 @@ CFG = {
 
     "23_ENTRY2_ENABLE": True,
 
-    "30_EXIT_EMA": 4,
+    # ---- EXIT EMA (TUNABLE) ----
+    "30_EXIT_FAST_EMA": 5,
+    "31_EXIT_MID_EMA": 8,
 
     "40_SL_ENABLE": False,
     "41_SL_PCT": 1.2,
@@ -59,7 +63,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("VELLA_v9_SHORT")
+log = logging.getLogger("VELLA_v9_SHORT")  
 
 # ============================================================
 # BINANCE
@@ -138,6 +142,20 @@ def calculate_quantity(qty_raw, lot: Dict[str, Decimal]) -> Optional[str]:
     precision = abs(step.as_tuple().exponent)
     return f"{qty:.{precision}f}"
 
+def normalize_qty_str(qty_str: str, lot: Dict[str, Decimal]) -> Optional[str]:
+    """EXIT 전용: 이미 str인 qty를 stepSize 기준으로 재정렬 후 반환."""
+    if lot is None:
+        return None
+    qty_decimal = Decimal(qty_str)
+    step = lot["stepSize"]
+    qty  = (qty_decimal / step).quantize(Decimal("1"), rounding=ROUND_DOWN) * step
+    if qty < lot["minQty"]:
+        return None
+    if qty > lot["maxQty"]:
+        qty = lot["maxQty"]
+    precision = abs(step.as_tuple().exponent)
+    return f"{qty:.{precision}f}"
+
 # ============================================================
 # EMA — incremental (옵티 동일 방식)
 # ============================================================
@@ -151,11 +169,9 @@ class IncrementalEMA:
     def __init__(self, period: int):
         self.period  = period
         self.k       = 2.0 / (period + 1)
-        self.value   = None          # 현재 EMA 값
-        self.ready   = False         # warm-up 완료 여부
-        self._buf: List[float] = []  # warm-up 버퍼
-
-        # slope 계산용: lookback 크기만큼 과거 EMA 보관
+        self.value   = None
+        self.ready   = False
+        self._buf: List[float] = []
         self._history: Deque[float] = deque()
 
     def update(self, price: float) -> None:
@@ -167,7 +183,6 @@ class IncrementalEMA:
                 self._buf  = []
         else:
             self.value = price * self.k + self.value * (1.0 - self.k)
-
         if self.ready:
             self._history.append(self.value)
 
@@ -175,13 +190,11 @@ class IncrementalEMA:
         return self.value if self.ready else None
 
     def get_prev(self) -> Optional[float]:
-        """직전 bar EMA (현재 bar update 이전 값)"""
         if len(self._history) >= 2:
             return self._history[-2]
         return None
 
     def get_lookback(self, n: int) -> Optional[float]:
-        """현재 기준 n bars 전 EMA"""
         if len(self._history) > n:
             return self._history[-(n + 1)]
         return None
@@ -208,16 +221,15 @@ class EngineState:
     last_open_time: Optional[int]  = None
     position:       Optional[Position] = None
 
-    # OHLC 히스토리 (E2 판단용)
     close_history: Deque[float] = field(default_factory=lambda: deque(maxlen=2000))
     high_history:  Deque[float] = field(default_factory=lambda: deque(maxlen=2000))
     low_history:   Deque[float] = field(default_factory=lambda: deque(maxlen=2000))
 
-    # incremental EMA 객체
-    ema_fast:  IncrementalEMA = field(default_factory=lambda: IncrementalEMA(CFG["10_EMA_FAST"]))
-    ema_mid:   IncrementalEMA = field(default_factory=lambda: IncrementalEMA(CFG["11_EMA_MID"]))
-    ema_arena: IncrementalEMA = field(default_factory=lambda: IncrementalEMA(CFG["12_EMA_ARENA"]))
-    ema_exit:  IncrementalEMA = field(default_factory=lambda: IncrementalEMA(CFG["30_EXIT_EMA"]))
+    ema_fast:      IncrementalEMA = field(default_factory=lambda: IncrementalEMA(CFG["10_EMA_FAST"]))
+    ema_mid:       IncrementalEMA = field(default_factory=lambda: IncrementalEMA(CFG["11_EMA_MID"]))
+    ema_arena:     IncrementalEMA = field(default_factory=lambda: IncrementalEMA(CFG["12_EMA_ARENA"]))
+    ema_exit_fast: IncrementalEMA = field(default_factory=lambda: IncrementalEMA(CFG["30_EXIT_FAST_EMA"]))
+    ema_exit_mid:  IncrementalEMA = field(default_factory=lambda: IncrementalEMA(CFG["31_EXIT_MID_EMA"]))
 
     prev_arena_state: Optional[bool] = None
 
@@ -231,18 +243,18 @@ def _warmup_done(st: EngineState) -> bool:
         CFG["10_EMA_FAST"],
         CFG["11_EMA_MID"],
         CFG["12_EMA_ARENA"],
-        CFG["30_EXIT_EMA"],
+        CFG["30_EXIT_FAST_EMA"],
+        CFG["31_EXIT_MID_EMA"],
         swing + 2,
-        62,
+        62,  # 옵티 기준 안전 warmup 바닥값 (backtest range(60,...) 대응)
     )
     return st.bar >= needed
 
 # ============================================================
-# ENTRY SIGNALS (v10 backtest_short 100% 미러)
+# ENTRY SIGNALS (v10 backtest_short 100% 미러 — FROZEN)
 # ============================================================
 
 def short_entry_signals(st: EngineState) -> str:
-    """반환: 'E1' / 'E2' / ''"""
     if not _warmup_done(st):
         return ""
 
@@ -262,12 +274,10 @@ def short_entry_signals(st: EngineState) -> str:
     if fast_prev is None or mid_prev is None:
         return ""
 
-    # Arena: FAST < ARENA
     short_arena = fast_now < arena_now
     if not short_arena:
         return ""
 
-    # Slope: ema_fast[-1] vs ema_fast[-(lookback+1)]
     swing_lookback  = int(CFG["15_SWING_LOOKBACK"])
     slope_threshold = float(CFG["14_SLOPE_THRESHOLD"])
     ref = fast.get_lookback(swing_lookback)
@@ -278,12 +288,9 @@ def short_entry_signals(st: EngineState) -> str:
     if not slope_ok:
         return ""
 
-    # E1: Dead cross (완료봉 기준 — prev/now)
     e1_signal = (fast_prev >= mid_prev) and (fast_now < mid_now)
 
-    # E2: 윗꼬리 터치 → 실패 마감
     tolerance = float(CFG["13_TOUCH_TOLERANCE"])
-    # high_history[-2] = 직전 완료봉 high / close_history[-1] = 현재 완료봉 close
     if len(st.high_history) < 2 or len(st.close_history) < 1:
         return ""
     pullback  = st.high_history[-2] >= fast_prev * (1.0 - tolerance)
@@ -319,14 +326,13 @@ def exit_signal(st: EngineState) -> bool:
                 log.info(f"[EXIT_TIMEOUT] bars={st.bar - pos.entry_bar}")
                 return True
 
-    exit_now = st.ema_exit.get()
-    if exit_now is None:
+    ef = st.ema_exit_fast.get()
+    em = st.ema_exit_mid.get()
+    if ef is None or em is None:
         return False
-
-    if close > exit_now:
-        log.info(f"[EXIT_EMA] close={close} > EMA_EXIT={exit_now}")
+    if ef > em:
+        log.info(f"[EXIT_EMA_CROSS] ef={ef:.8f} em={em:.8f} close={close:.8f}")
         return True
-
     return False
 
 # ============================================================
@@ -357,15 +363,15 @@ def place_short_entry(client: "Client", symbol: str, capital_usdt: float, lot: D
 
 def place_short_exit(client: "Client", symbol: str, qty: str, lot: Dict[str, Decimal]) -> bool:
     try:
-        qty_str = calculate_quantity(qty, lot)
-        if qty_str is None:
+        qty2 = normalize_qty_str(qty, lot)
+        if qty2 is None:
             log.error("exit: qty too small")
             return False
         client.futures_create_order(
             symbol=symbol,
             side=SIDE_BUY,
             type=ORDER_TYPE_MARKET,
-            quantity=qty_str,
+            quantity=qty2,
             reduceOnly=True
         )
         return True
@@ -385,7 +391,6 @@ signal.signal(signal.SIGINT, _sig_handler)
 signal.signal(signal.SIGTERM, _sig_handler)
 
 def _apply_bar(st: EngineState, close: float, high: float, low: float) -> None:
-    """히스토리 append + EMA incremental update"""
     st.close_history.append(close)
     st.high_history.append(high)
     st.low_history.append(low)
@@ -393,12 +398,14 @@ def _apply_bar(st: EngineState, close: float, high: float, low: float) -> None:
     st.ema_fast.update(close)
     st.ema_mid.update(close)
     st.ema_arena.update(close)
-    st.ema_exit.update(close)
+    st.ema_exit_fast.update(close)
+    st.ema_exit_mid.update(close)
 
     st.ema_fast.trim_history()
     st.ema_mid.trim_history()
     st.ema_arena.trim_history()
-    st.ema_exit.trim_history()
+    st.ema_exit_fast.trim_history()
+    st.ema_exit_mid.trim_history()
 
 def engine():
     client   = init_client()
@@ -414,7 +421,6 @@ def engine():
 
     st = EngineState()
 
-    # SYNC 포지션
     try:
         positions = client.futures_position_information(symbol=symbol)
         for pos in positions:
@@ -437,7 +443,11 @@ def engine():
     except Exception as e:
         log.error(f"position sync failed: {e}")
 
-    log.info(f"START v9.6 SHORT | symbol={symbol} interval={interval} capital={capital} lev={CFG['04_LEVERAGE']}")
+    log.info(
+        f"START v8 SHORT | symbol={symbol} interval={interval} capital={capital} lev={CFG['04_LEVERAGE']} "
+        f"| ENTRY_EMA=({CFG['10_EMA_FAST']},{CFG['11_EMA_MID']},{CFG['12_EMA_ARENA']}) "
+        f"| EXIT_EMA=({CFG['30_EXIT_FAST_EMA']},{CFG['31_EXIT_MID_EMA']})"
+    )
 
     while not STOP:
         try:
@@ -453,7 +463,6 @@ def engine():
                 time.sleep(CFG["91_POLL_SEC"])
                 continue
 
-            # 최초 부트스트랩: 완료봉 전체 반영
             if not st.close_history:
                 for k in kl[:-1]:
                     _apply_bar(st, float(k[4]), float(k[2]), float(k[3]))
@@ -467,7 +476,6 @@ def engine():
 
             _apply_bar(st, float(completed[4]), float(completed[2]), float(completed[3]))
 
-            # Arena 상태 변화 로그
             if st.ema_fast.ready and st.ema_arena.ready:
                 short_arena_now = st.ema_fast.get() < st.ema_arena.get()
                 if short_arena_now != st.prev_arena_state:
@@ -494,7 +502,6 @@ def engine():
                     else:
                         log.error("[ENTRY_FAIL] order failed")
             else:
-                # 진입 봉 청산 금지 (v10 미러)
                 if st.position.entry_bar == st.bar:
                     continue
 
@@ -503,7 +510,7 @@ def engine():
                     if ok:
                         log.info(f"[EXIT] SHORT type={st.position.entry_type} close={st.close_history[-1]} entry={st.position.entry_price} bar={st.bar}")
                         st.position = None
-                        continue  # 청산 봉 즉시 재진입 금지 (v10 미러)
+                        continue
                     else:
                         log.error("[EXIT_FAIL] order failed")
 
@@ -511,7 +518,7 @@ def engine():
             log.error(f"engine loop error: {e}")
             time.sleep(CFG["91_POLL_SEC"])
 
-    log.info("STOP v9.6 SHORT")
+    log.info("STOP v8 SHORT")
 
 if __name__ == "__main__":
     engine()
