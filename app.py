@@ -30,24 +30,28 @@ CFG = {
     "04_LEVERAGE": 1,
 
     # ---- ENTRY EMA (FROZEN) ----
-    "10_EMA_FAST": 5,
-    "11_EMA_MID": 10,
+    "10_EMA_FAST": 8,
+    "11_EMA_MID": 14,
     "12_EMA_ARENA": 30,
-    "13_TOUCH_TOLERANCE": 0.001,
-    "14_SLOPE_THRESHOLD": 0.001,
-    "15_SWING_LOOKBACK": 5,
+
+    # ---- 필터 강화 (핵심) ----
+    "13_TOUCH_TOLERANCE": 0.002,
+    "14_SLOPE_THRESHOLD": 0.002,
+    "15_SWING_LOOKBACK": 4,
 
     "23_ENTRY2_ENABLE": True,
 
     # ---- EXIT EMA (TUNABLE) ----
-    "30_EXIT_FAST_EMA": 5,
-    "31_EXIT_MID_EMA": 8,
+    "30_EXIT_FAST_EMA": 6,
+    "31_EXIT_MID_EMA": 10,
 
-    "40_SL_ENABLE": False,
-    "41_SL_PCT": 1.2,
+    # ---- 리스크 관리 ----
 
-    "50_TIMEOUT_EXIT_ENABLE": False,
-    "51_TIMEOUT_BARS": 60,
+    "40_SL_ENABLE": True,
+    "41_SL_PCT": 0.8,
+
+    "50_TIMEOUT_EXIT_ENABLE": True,
+    "51_TIMEOUT_BARS": 18,
 
     "90_KLINE_LIMIT": 1500,
     "91_POLL_SEC": 5,
@@ -63,7 +67,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("VELLA_v9_SHORT")  
+log = logging.getLogger("VELLA_v9_SHORT")
 
 # ============================================================
 # BINANCE
@@ -143,7 +147,6 @@ def calculate_quantity(qty_raw, lot: Dict[str, Decimal]) -> Optional[str]:
     return f"{qty:.{precision}f}"
 
 def normalize_qty_str(qty_str: str, lot: Dict[str, Decimal]) -> Optional[str]:
-    """EXIT 전용: 이미 str인 qty를 stepSize 기준으로 재정렬 후 반환."""
     if lot is None:
         return None
     qty_decimal = Decimal(qty_str)
@@ -161,11 +164,6 @@ def normalize_qty_str(qty_str: str, lot: Dict[str, Decimal]) -> Optional[str]:
 # ============================================================
 
 class IncrementalEMA:
-    """
-    옵티(ema_series)와 동일한 Wilder EMA.
-    부트스트랩: 첫 period 개 close의 단순 평균으로 seed.
-    이후: prev * (1-k) + price * k
-    """
     def __init__(self, period: int):
         self.period  = period
         self.k       = 2.0 / (period + 1)
@@ -234,7 +232,7 @@ class EngineState:
     prev_arena_state: Optional[bool] = None
 
 # ============================================================
-# WARMUP 완료 여부
+# WARMUP
 # ============================================================
 
 def _warmup_done(st: EngineState) -> bool:
@@ -246,7 +244,7 @@ def _warmup_done(st: EngineState) -> bool:
         CFG["30_EXIT_FAST_EMA"],
         CFG["31_EXIT_MID_EMA"],
         swing + 2,
-        62,  # 옵티 기준 안전 warmup 바닥값 (backtest range(60,...) 대응)
+        62,
     )
     return st.bar >= needed
 
@@ -274,8 +272,17 @@ def short_entry_signals(st: EngineState) -> str:
     if fast_prev is None or mid_prev is None:
         return ""
 
-    short_arena = fast_now < arena_now
+    # ▶ SHORT ARENA: 종가/EMA5/EMA10 모두 EMA30 아래여야 진입 허용
+    close_now   = st.close_history[-1]
+    short_arena = (
+        (close_now < arena_now) and
+        (fast_now  < arena_now) and
+        (mid_now   < arena_now)
+    )
     if not short_arena:
+        log.debug(
+            f"[ARENA_BLOCK] close={close_now:.8f} fast={fast_now:.8f} mid={mid_now:.8f} arena={arena_now:.8f}"
+        )
         return ""
 
     swing_lookback  = int(CFG["15_SWING_LOOKBACK"])
@@ -444,7 +451,7 @@ def engine():
         log.error(f"position sync failed: {e}")
 
     log.info(
-        f"START v8 SHORT | symbol={symbol} interval={interval} capital={capital} lev={CFG['04_LEVERAGE']} "
+        f"START v9 SHORT | symbol={symbol} interval={interval} capital={capital} lev={CFG['04_LEVERAGE']} "
         f"| ENTRY_EMA=({CFG['10_EMA_FAST']},{CFG['11_EMA_MID']},{CFG['12_EMA_ARENA']}) "
         f"| EXIT_EMA=({CFG['30_EXIT_FAST_EMA']},{CFG['31_EXIT_MID_EMA']})"
     )
@@ -476,13 +483,20 @@ def engine():
 
             _apply_bar(st, float(completed[4]), float(completed[2]), float(completed[3]))
 
-            if st.ema_fast.ready and st.ema_arena.ready:
-                short_arena_now = st.ema_fast.get() < st.ema_arena.get()
+            # ▶ ARENA 로그: ema_mid.ready 추가로 None 비교 완전 차단
+            if st.ema_fast.ready and st.ema_mid.ready and st.ema_arena.ready and st.close_history:
+                close_now       = st.close_history[-1]
+                arena_now       = st.ema_arena.get()
+                short_arena_now = (
+                    (close_now         < arena_now) and
+                    (st.ema_fast.get() < arena_now) and
+                    (st.ema_mid.get()  < arena_now)
+                )
                 if short_arena_now != st.prev_arena_state:
                     if short_arena_now:
-                        log.info(f"[ARENA] fast<arena 통과")
+                        log.info(f"[ARENA] 통과 close={close_now:.8f} < arena={arena_now:.8f}")
                     else:
-                        log.info(f"[ARENA] fast>=arena 차단")
+                        log.info(f"[ARENA] 차단 close={close_now:.8f} arena={arena_now:.8f}")
                     st.prev_arena_state = short_arena_now
 
             if st.position is None:
@@ -518,7 +532,7 @@ def engine():
             log.error(f"engine loop error: {e}")
             time.sleep(CFG["91_POLL_SEC"])
 
-    log.info("STOP v8 SHORT")
+    log.info("STOP v9 SHORT")
 
 if __name__ == "__main__":
     engine()
