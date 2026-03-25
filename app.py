@@ -37,8 +37,15 @@ import time
 import logging
 import os
 from decimal import Decimal, ROUND_DOWN
-from binance.um_futures import UMFutures
-from binance.error import ClientError
+try:
+    from binance.client import Client
+    from binance.exceptions import BinanceAPIException, BinanceOrderException
+except Exception:
+    Client = None
+    BinanceAPIException = Exception
+    BinanceOrderException = Exception
+
+ClientError = (BinanceAPIException, BinanceOrderException)
 
 # ============================================================
 # CFG
@@ -102,9 +109,60 @@ log = logging.getLogger("VELLA_RS9")
 # ============================================================
 # 클라이언트
 # ============================================================
+# ============================================================
+# 클라이언트 (BR9 python-binance 호환 어댑터)
+# ============================================================
 API_KEY    = os.environ.get("BINANCE_API_KEY", "")
 API_SECRET = os.environ.get("BINANCE_API_SECRET", "")
-client     = UMFutures(key=API_KEY, secret=API_SECRET)
+
+if Client is None:
+    raise RuntimeError("python-binance missing")
+
+
+class BinanceFuturesCompat:
+    def __init__(self, key: str, secret: str):
+        self._client = Client(key, secret)
+
+    def exchange_info(self):
+        return self._client.futures_exchange_info()
+
+    def klines(self, symbol: str, interval: str, limit: int = 500):
+        return self._client.futures_klines(
+            symbol=symbol,
+            interval=interval,
+            limit=limit,
+        )
+
+    def get_position_risk(self, symbol: str):
+        return self._client.futures_position_information(symbol=symbol)
+
+    def get_orders(self, symbol: str):
+        # 현재 기준선 코드는 "오픈 주문"만 필요
+        return self._client.futures_get_open_orders(symbol=symbol)
+
+    def cancel_order(self, symbol: str, orderId: int):
+        return self._client.futures_cancel_order(symbol=symbol, orderId=orderId)
+
+    def cancel_open_orders(self, symbol: str):
+        return self._client.futures_cancel_all_open_orders(symbol=symbol)
+
+    def query_order(self, symbol: str, orderId: int):
+        return self._client.futures_get_order(symbol=symbol, orderId=orderId)
+
+    def new_order(self, **kwargs):
+        # 기존 기준선 문자열 "true" 호환 처리
+        if "reduceOnly" in kwargs and isinstance(kwargs["reduceOnly"], str):
+            kwargs["reduceOnly"] = kwargs["reduceOnly"].lower() == "true"
+        return self._client.futures_create_order(**kwargs)
+
+    def change_leverage(self, symbol: str, leverage: int):
+        return self._client.futures_change_leverage(symbol=symbol, leverage=leverage)
+
+    def ticker_price(self, symbol: str):
+        return self._client.futures_symbol_ticker(symbol=symbol)
+
+
+client = BinanceFuturesCompat(API_KEY, API_SECRET)
 
 # ============================================================
 # 심볼 필터 캐시
