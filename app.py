@@ -65,7 +65,7 @@ CFG = {
     "HTF_FILTER_EMA_LEN": 15,
     "HTF_FILTER_ENABLE":  True,
 
-    "TOTAL_CAPITAL_USDT": 200.0,
+    "TOTAL_CAPITAL_USDT": 2000.0,
     "LEVERAGE":           1,
     "MAX_CAPITAL_RATIO":  0.95,
 
