@@ -7,6 +7,11 @@ v8 대비 단일 패치:
 - 모든 BUY exit cancel을 _safe_cancel()로 일원화
 - FILLED / 이미 취소된 BUY exit 주문 재cancel 방지
 
+[추가 패치]
+- 트리거: 1H → 15M EMA15 하향돌파
+- 1차 진입: 시장가 즉시 체결 (2~10차는 지정가 유지)
+- LADDER_ACTIVE 미체결 타임아웃: 5M 12봉 체결 0개 시 철거→WATCHING
+
 EXIT 우선순위:
   1. HARD SL
   2. TIMEOUT
@@ -16,15 +21,15 @@ EXIT 우선순위:
   ※ TP1 후: 트레일링 EXIT 전용
 
 상태 머신:
-  WATCHING       — 포지션 없음. 4H 필터 + 1H 트리거 대기.
+  WATCHING       — 포지션 없음. 4H 필터 + 15M 트리거 대기.
   LADDER_ACTIVE  — 거미줄 배치 완료. 체결 및 무효화 감시.
   POSITION_HOLD  — 포지션 존재. EXIT 동기화 및 강제종료 관리.
   COOLDOWN       — 청산 완료 후 재진입 금지 대기.
 
 역할 분리:
-  4H FILTER  — 숏 허용 여부만 판단 (close < EMA15)
-  1H TRIGGER — EMA15 하향 돌파 감지 (완료봉 기준)
-  5M MGMT    — 체결 추적 / 타임아웃 / 쿨다운 / EXIT 동기화
+  4H FILTER   — 숏 허용 여부만 판단 (close < EMA15)
+  5M TRIGGER  — EMA15 역전 감지 (close[-1]<EMA15 + high[-2]>EMA15 + close[-1]<close[-2], 완료봉 기준)
+  5M MGMT     — 체결 추적 / 타임아웃 / 쿨다운 / EXIT 동기화
 
 재시작 sync:
   A: 포지션 있음              → POSITION_HOLD, tp1_done=True, trail_low=None
@@ -52,7 +57,7 @@ ClientError = (BinanceAPIException, BinanceOrderException)
 # ============================================================
 CFG = {
     "SYMBOL":              "SEIUSDT",
-    "INTERVAL_TRIGGER":    "1h",
+    "INTERVAL_TRIGGER":    "5m",        # 1h → 15m → 5m 변경
     "INTERVAL_EXEC":       "5m",
     "INTERVAL_FILTER_HTF": "4h",
     "EMA_TRIGGER_LEN":     15,
@@ -61,7 +66,7 @@ CFG = {
     "HTF_FILTER_ENABLE":  True,
 
     "TOTAL_CAPITAL_USDT": 200.0,
-    "LEVERAGE":           3,
+    "LEVERAGE":           1,
     "MAX_CAPITAL_RATIO":  0.95,
 
     "LADDER_COUNT":   10,
@@ -87,7 +92,9 @@ CFG = {
     "TIMEOUT_BARS_AFTER_DEEP": 12,
     "HARD_SL_PCT":             0.08,
 
-    "REENTRY_COOLDOWN_BARS":      12,
+    "LADDER_NO_FILL_TIMEOUT_BARS": 12,  # 신규: 미체결 타임아웃 5M 12봉
+
+    "REENTRY_COOLDOWN_BARS":      8,
     "POLL_INTERVAL_SEC":          10,
     "BAR_CHECK_MIN_INTERVAL_SEC": 40,
     "LOG_LEVEL": "INFO",
@@ -106,9 +113,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("VELLA_RS9")
 
-# ============================================================
-# 클라이언트
-# ============================================================
 # ============================================================
 # 클라이언트 (BR9 python-binance 호환 어댑터)
 # ============================================================
@@ -137,7 +141,6 @@ class BinanceFuturesCompat:
         return self._client.futures_position_information(symbol=symbol)
 
     def get_orders(self, symbol: str):
-        # 현재 기준선 코드는 "오픈 주문"만 필요
         return self._client.futures_get_open_orders(symbol=symbol)
 
     def cancel_order(self, symbol: str, orderId: int):
@@ -150,7 +153,6 @@ class BinanceFuturesCompat:
         return self._client.futures_get_order(symbol=symbol, orderId=orderId)
 
     def new_order(self, **kwargs):
-        # 기존 기준선 문자열 "true" 호환 처리
         if "reduceOnly" in kwargs and isinstance(kwargs["reduceOnly"], str):
             kwargs["reduceOnly"] = kwargs["reduceOnly"].lower() == "true"
         return self._client.futures_create_order(**kwargs)
@@ -316,31 +318,41 @@ def check_4h_short_filter(symbol: str, cache: BarCache) -> bool:
     return result
 
 # ============================================================
-# 1H EMA15 트리거
+# 5M EMA15 역전 트리거 + 1봉 확정 필터
+# 조건:
+#   1) close[-1] < ema15[-1]   — EMA15 하향 돌파
+#   2) high[-2]  > ema15[-2]   — 직전봉 고가가 EMA15 위 (꺾이는 순간)
+#   3) close[-1] < close[-2]   — 하락 확정 1봉
 # ============================================================
 
-def _compute_1h_trigger(closes: list) -> bool:
+def _compute_5m_trigger(closes: list, highs: list) -> bool:
     period = CFG["EMA_TRIGGER_LEN"]
-    if len(closes) < period + 2:
+    if len(closes) < period + 2 or len(highs) < period + 2:
         return False
-    ema_s   = calc_ema(closes, period)
-    crossed = (closes[-2] > ema_s[-2]) and (closes[-1] < ema_s[-1])
-    if crossed:
+    ema_s = calc_ema(closes, period)
+    cond1 = closes[-1] < ema_s[-1]
+    cond2 = highs[-2]  > ema_s[-2]
+    cond3 = closes[-1] < closes[-2]
+    triggered = cond1 and cond2 and cond3
+    if triggered:
         log.info(
-            f"[1H TRIGGER] EMA15 하향 돌파: "
-            f"prev={closes[-2]:.4f}>ema={ema_s[-2]:.4f} | "
-            f"curr={closes[-1]:.4f}<ema={ema_s[-1]:.4f}"
+            f"[5M TRIGGER] EMA15 역전 확정: "
+            f"close={closes[-1]:.4f}<ema={ema_s[-1]:.4f} | "
+            f"high[-2]={highs[-2]:.4f}>ema[-2]={ema_s[-2]:.4f} | "
+            f"close[-1]={closes[-1]:.4f}<close[-2]={closes[-2]:.4f}"
         )
-    return crossed
+    return triggered
+
 
 def calc_ema15_trigger(symbol: str, cache: BarCache) -> tuple[bool, int]:
     period = CFG["EMA_TRIGGER_LEN"]
-    result, ts = cache.query(
-        fetch_fn=lambda: get_closed_bar_ts_with_closes(
-            symbol, CFG["INTERVAL_TRIGGER"], limit=period + 10
-        ),
-        compute_fn=_compute_1h_trigger,
-    )
+    limit  = period + 10
+    raw    = client.klines(symbol, CFG["INTERVAL_TRIGGER"], limit=limit + 1)
+    closed = raw[:-1]
+    closes = [float(k[4]) for k in closed]
+    highs  = [float(k[2]) for k in closed]
+    ts     = int(closed[-1][0]) if closed else 0
+    result = _compute_5m_trigger(closes, highs)
     return result, ts
 
 # ============================================================
@@ -402,6 +414,22 @@ def place_limit_short(symbol: str, price: float, qty: float) -> dict | None:
         return order
     except ClientError as e:
         log.error(f"숏 주문 실패: {e}")
+        return None
+
+def place_market_short(symbol: str, qty: float) -> dict | None:
+    q_str = fmt_qty(abs(qty), symbol)
+    if float(q_str) <= 0:
+        log.warning(f"시장가 숏 스킵: qty={q_str}")
+        return None
+    try:
+        order = client.new_order(
+            symbol=symbol, side="SELL", type="MARKET",
+            quantity=q_str,
+        )
+        log.info(f"시장가 숏 진입: {q_str}")
+        return order
+    except ClientError as e:
+        log.error(f"시장가 숏 실패: {e}")
         return None
 
 def place_limit_exit(symbol: str, price: float, qty: float) -> dict | None:
@@ -522,8 +550,9 @@ class RangeShortEngine:
 
         self._closing_in_progress: bool = False
 
-        self.bars_after_deep = 0
-        self.cooldown_bars   = 0
+        self.bars_after_deep  = 0
+        self.cooldown_bars    = 0
+        self.no_fill_bars     = 0  # 신규: 미체결 타임아웃 카운터
 
         self.last_trigger_bar_ts: int = 0
 
@@ -552,7 +581,6 @@ class RangeShortEngine:
         for o in self.ladder_orders:
             self._safe_cancel(o["order_id"])
 
-    # v9 패치: BUY exit cancel도 _safe_cancel로 일원화
     def cancel_buy_exit_orders(self, exit_order_ids: list):
         for oid in exit_order_ids:
             self._safe_cancel(oid)
@@ -676,7 +704,7 @@ class RangeShortEngine:
             triggered, bar_ts = calc_ema15_trigger(symbol, self._trigger_cache)
 
             if triggered and bar_ts == self.last_trigger_bar_ts:
-                log.debug(f"동일 1H 봉 재트리거 차단: ts={bar_ts}")
+                log.debug(f"동일 15M 봉 재트리거 차단: ts={bar_ts}")
                 return
 
             if triggered:
@@ -690,7 +718,19 @@ class RangeShortEngine:
                 log.info("포지션 체결 감지 → POSITION_HOLD")
                 self.state              = "POSITION_HOLD"
                 self.bars_after_deep    = 0
+                self.no_fill_bars       = 0
                 self._last_position_amt = pos["amt"]
+                return
+
+            # 신규: 미체결 타임아웃 — 5M 12봉 체결 0개 시 철거→WATCHING
+            if new_bar:
+                self.no_fill_bars += 1
+                log.info(f"거미줄 미체결 대기: {self.no_fill_bars}/{CFG['LADDER_NO_FILL_TIMEOUT_BARS']}봉")
+            if self.no_fill_bars >= CFG["LADDER_NO_FILL_TIMEOUT_BARS"]:
+                log.warning(f"거미줄 미체결 타임아웃 ({self.no_fill_bars}봉) → 철거 후 WATCHING")
+                self._cancel_ladder_orders()
+                self._reset_ladder()
+                self.state = "WATCHING"
                 return
 
             if self._is_ladder_invalid(current_price):
@@ -790,7 +830,7 @@ class RangeShortEngine:
             self.exit_order_ids = []
 
             self._cancel_ladder_orders()
-            self.ladder_orders    = []
+            self.ladder_orders     = []
             self._filled_order_ids = set()
             self.max_filled_stage  = 0
 
@@ -828,7 +868,7 @@ class RangeShortEngine:
             )
 
     # --------------------------------------------------------
-    # 거미줄 배치
+    # 거미줄 배치 — 1차 시장가, 2~10차 지정가
     # --------------------------------------------------------
     def _deploy_ladder(self, current_price: float):
         symbol  = self.symbol
@@ -846,14 +886,32 @@ class RangeShortEngine:
 
         log.info(f"거미줄 배치 | 기준가: {current_price:.4f} | {count}단계")
         success = 0
-        for i, (p, q) in enumerate(zip(prices, qtys)):
-            order = place_limit_short(symbol, p, q)
+
+        # 1차: 시장가 즉시 진입
+        order_1st = place_market_short(symbol, qtys[0])
+        if order_1st:
+            self.ladder_orders.append({
+                "stage":    1,
+                "order_id": int(order_1st["orderId"]),
+                "price":    current_price,
+                "qty":      qtys[0],
+            })
+            self._filled_order_ids.add(int(order_1st["orderId"]))
+            self.max_filled_stage = 1
+            success += 1
+            log.info(f"1차 시장가 진입 완료: qty={fmt_qty(qtys[0], symbol)}")
+        else:
+            log.error("1차 시장가 진입 실패")
+
+        # 2~10차: 지정가 거미줄
+        for i in range(1, count):
+            order = place_limit_short(symbol, prices[i], qtys[i])
             if order:
                 self.ladder_orders.append({
                     "stage":    i + 1,
                     "order_id": int(order["orderId"]),
-                    "price":    p,
-                    "qty":      q,
+                    "price":    prices[i],
+                    "qty":      qtys[i],
                 })
                 success += 1
             time.sleep(0.15)
@@ -863,7 +921,8 @@ class RangeShortEngine:
             self.state = "WATCHING"
         else:
             log.info(f"거미줄 배치 완료: {success}/{count}개 → LADDER_ACTIVE")
-            self.state = "LADDER_ACTIVE"
+            self.no_fill_bars = 0
+            self.state = "POSITION_HOLD" if order_1st else "LADDER_ACTIVE"
 
     # --------------------------------------------------------
     # 거미줄 무효화
@@ -920,6 +979,7 @@ class RangeShortEngine:
         self.last_exit_qty          = 0.0
         self.last_exit_price        = 0.0
         self.bars_after_deep        = 0
+        self.no_fill_bars           = 0
         self.last_stage             = 0
         self._filled_order_ids      = set()
         self._canceled_order_ids    = set()
