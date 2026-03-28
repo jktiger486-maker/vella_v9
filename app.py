@@ -65,12 +65,12 @@ CFG = {
     "HTF_FILTER_EMA_LEN": 15,
     "HTF_FILTER_ENABLE":  True,
 
-    "TOTAL_CAPITAL_USDT": 2000.0,
-    "LEVERAGE":           1,
+    "TOTAL_CAPITAL_USDT": 10000.0,
+    "LEVERAGE":           3,
     "MAX_CAPITAL_RATIO":  0.95,
 
     "LADDER_COUNT":   10,
-    "LADDER_GAP_PCT": 0.01,
+    "LADDER_GAP_PCT": 0.012,
     "SIZE_WEIGHTS": [
         1.5, 1.4, 1.3, 1.2, 1.1,
         1.0, 0.9, 0.8, 0.7, 0.6
@@ -80,12 +80,12 @@ CFG = {
 
     "TP1_PROFIT_PCT":       0.008,
     "TP1_PARTIAL_RATIO":    0.5,
-    "TRAILING_REBOUND_PCT": 0.01,
+    "TRAILING_REBOUND_PCT": 0.008, # 트레일링 되돌림 허용
 
     "FEE_PCT_ONEWAY":           0.0004,
-    "TARGET_PROFIT_STAGE_1_3":  0.0025,
-    "TARGET_PROFIT_STAGE_4_7":  0.0010,
-    "TARGET_PROFIT_STAGE_8_10": -0.0010,
+    "TARGET_PROFIT_STAGE_1_3":  0.003,
+    "TARGET_PROFIT_STAGE_4_7":  0.0012,
+    "TARGET_PROFIT_STAGE_8_10": -0.0008,
     "EXIT_REPRICE_THRESHOLD_PCT": 0.003,
 
     "DEEP_FILL_STAGE":         8,
