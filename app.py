@@ -81,7 +81,7 @@ ClientError = (BinanceAPIException, BinanceOrderException)
 # ============================================================
 CFG = {
     # ── 10번대: 심볼 / 시간축 ──────────────────────────────
-    "SYMBOL":              "SEIUSDT",
+    "SYMBOL":              "OPUSDT",
     "INTERVAL_TRIGGER":    "5m",
     "INTERVAL_EXEC":       "5m",
     "INTERVAL_FILTER_HTF": "4h",
@@ -92,7 +92,7 @@ CFG = {
     "HTF_FILTER_ENABLE":  True,
 
     # ── 30번대: 자본 / 레버리지 / 마진 ───────────────────
-    "TOTAL_CAPITAL_USDT": 6000.0,
+    "TOTAL_CAPITAL_USDT": 5000.0,
     "LEVERAGE":           3,
     "MARGIN_TYPE":        "CROSS",   # CROSS / ISOLATED
     "MAX_CAPITAL_RATIO":  0.95,
