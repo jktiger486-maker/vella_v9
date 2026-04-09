@@ -57,7 +57,7 @@ CFG = {
     "MAX_CAPITAL_RATIO":  0.95,
 
     "LADDER_COUNT":   10,
-    "LADDER_GAP_PCT": 0.025,
+    "LADDER_GAP_PCT": 0.04,
     "SIZE_WEIGHTS": [
         0.6, 0.8, 1.1, 1.5, 2.0,
         1.2, 1.0, 0.8, 0.7, 0.6
