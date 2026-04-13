@@ -1,25 +1,58 @@
 """
 ============================================================
-VELLA RANGE SHORT LADDER v9_거미줄 작전
+VELLA RANGE SHORT LADDER v9.2 (BR9 기준선 — SL 없음 정상 처리 패치)
 ============================================================
-[버그 수정 패치 — 공식 확정 5개]
 
-BUG 1 — INIT 순서 오류
-  __init__에서 set_margin_type/set_leverage 호출 제거
-  → run() 진입 후 _sync_on_start() 먼저, 그 다음 margin/leverage 설정
+[v9.1 패치 내역 — BR10/BR8.7 기준 정렬]
+1. HARD SL 엔진 내부 → 10단 체결 완료 후에만 발동 (1~9단 비활성)
+2. TIMEOUT → 사실상 제거 (DEEP_FILL_STAGE=99, TIMEOUT_BARS=99999)
+3. LADDER INVALIDATION → 완전 비활성화
+   - LADDER_ACTIVE 내 _is_ladder_invalid() 제거
+   - POSITION_HOLD 내 pending_sell 무효화 체크 제거
+4. LADDER_NO_FILL_TIMEOUT_BARS: 12 → 99999
+5. TARGET PROFIT 단계별 상향:
+   - 4~5단: 0.5% → 0.8%
+   - 6~7단: 0.3% → 0.6%
+   - 8~9단: 0.1% → 0.4%
+   - 10단:  -0.08% → +0.3%
+6. EXIT_REPRICE_THRESHOLD_PCT: 0.003 → 0.006
+7. GAP: 4% → 5%
+8. SIZE_WEIGHTS: 중간 봉우리형 [0.5, 0.7, 1.0, 1.4, 1.8, 1.4, 1.0, 0.8, 0.6, 0.5]
 
-BUG 2 — SL 누적 구조
-  _sync_on_start() 포지션 복구 시 sl_orders[0] 외 나머지 전부 cancel
+[버그 수정 5개 — BR10 기준]
+B1. TP1 후 max_filled_stage 0 리셋 제거 → stage 유지
+B2. _deploy_ladder() 첫줄 state != WATCHING 차단 추가
+B3. EXIT 생성 조건 max_filled_stage >= 2 추가
+B4. _deploy_ladder() 종료 시 LADDER_ACTIVE 고정 (POSITION_HOLD 직행 제거)
+B5. _sync_exit_order() 비교 기준 현재값 → 이전값(last_*) 통일
 
-BUG 3 — 예외 처리 문자열 취약성
-  set_margin_type() except 문자열 폭넓게 처리 (변형 방어)
+[거래소 SL 10단 조건 통일 — BR8 v8.7 기준]
+- _deploy_ladder(): 10단 완료 후에만 거래소 SL 배치
+- POSITION_HOLD 내 SL 재설정: 10단 완료 후에만
+- _handle_tp1(): 10단 완료 후에만 SL 재설정
 
-BUG 4 — 1차 시장가 실패 후 later fill 시 SL 미배치
-  POSITION_HOLD 진입 경로에서 sl_price 존재 + sl_order_id 없으면 즉시 SL 배치
+[BR9 고유 패치 유지]
+- BUG1: run()에서 _sync_on_start() 먼저, margin/leverage 후순위
+- BUG2: 잉여 SL 전부 cancel (SL 누적 방지)
+- BUG3: set_margin_type() 예외 문자열 폭넓게 처리
+- BUG4: LADDER_ACTIVE→POSITION_HOLD 전환 시 SL 미배치 가드
+         → 단, 10단 완료 후에만 SL 배치 조건 반영
+- BUG5: LADDER_ACTIVE 복구 시 avg_full/sl_price 재계산
 
-BUG 5 — LADDER_ACTIVE 복구 시 avg_full/sl_price 미복구
-  _sync_on_start() LADDER_ACTIVE 경로에서 prices/qtys 재계산 후 avg_full/sl_price 복구
+EXIT 우선순위:
+  1. HARD SL 거래소 STOP_LIMIT (10단 완료 후 활성)
+  2. HARD SL 엔진 내부 백업 (10단 체결 완료 후에만)
+  3. TIMEOUT (사실상 비활성)
+  4. TP1 1% → 50% 부분청산 후 트레일링 전환
+  5. TRAIL EXIT: 저점 추적 → +0.5% 반등 시 전량 청산
+  ※ TP1 전: 지정가 EXIT (2단 이상 체결 후)
+  ※ TP1 후: 트레일링 EXIT 전용
 
+상태 머신:
+  WATCHING       — 포지션 없음. 4H 필터 + 5M 트리거 대기.
+  LADDER_ACTIVE  — 거미줄 배치 완료. 체결 감시 (무효화 없음).
+  POSITION_HOLD  — 포지션 존재. EXIT 동기화 및 최후 방어 관리.
+  COOLDOWN       — 청산 완료 후 재진입 금지 대기.
 ============================================================
 """
 
@@ -51,19 +84,19 @@ CFG = {
     "HTF_FILTER_EMA_LEN": 15,
     "HTF_FILTER_ENABLE":  True,
 
-    "TOTAL_CAPITAL_USDT": 5000.0,
+    "TOTAL_CAPITAL_USDT": 6000.0,
     "LEVERAGE":           3,
     "MARGIN_TYPE":        "CROSS",
     "MAX_CAPITAL_RATIO":  0.95,
 
     "LADDER_COUNT":   10,
-    "LADDER_GAP_PCT": 0.04,
+    "LADDER_GAP_PCT": 0.05,          # v9.1: 4% → 5%
     "SIZE_WEIGHTS": [
-        0.6, 0.8, 1.1, 1.5, 2.0,
-        1.2, 1.0, 0.8, 0.7, 0.6
+        0.5, 0.7, 1.0, 1.4, 1.8,    # v9.1: 중간 봉우리형
+        1.4, 1.0, 0.8, 0.6, 0.5
     ],
-    "LADDER_INVALIDATION_MULT":    2.0,
-    "LADDER_NO_FILL_TIMEOUT_BARS": 12,
+    "LADDER_INVALIDATION_MULT":    2.0,   # 비활성화됨
+    "LADDER_NO_FILL_TIMEOUT_BARS": 99999, # v9.1: 사실상 제거
 
     "TP1_PROFIT_PCT":       0.01,
     "TP1_PARTIAL_RATIO":    0.5,
@@ -71,18 +104,18 @@ CFG = {
 
     "FEE_PCT_ONEWAY":            0.0004,
     "TARGET_PROFIT_STAGE_1_3":   0.012,
-    "TARGET_PROFIT_STAGE_4_5":   0.005,
-    "TARGET_PROFIT_STAGE_6_7":   0.003,
-    "TARGET_PROFIT_STAGE_8_9":   0.001,
-    "TARGET_PROFIT_STAGE_10":   -0.0008,
-    "EXIT_REPRICE_THRESHOLD_PCT": 0.003,
+    "TARGET_PROFIT_STAGE_4_5":   0.008,   # v9.1: 0.5% → 0.8%
+    "TARGET_PROFIT_STAGE_6_7":   0.006,   # v9.1: 0.3% → 0.6%
+    "TARGET_PROFIT_STAGE_8_9":   0.004,   # v9.1: 0.1% → 0.4%
+    "TARGET_PROFIT_STAGE_10":    0.003,   # v9.1: -0.08% → +0.3%
+    "EXIT_REPRICE_THRESHOLD_PCT": 0.006,   # v9.1: 0.003 → 0.006
 
     "HARD_SL_PCT":             0.05,
     "SL_TICK_BUFFER":          0.003,
     "CAPITAL_CHECK_MIN_RATIO": 0.80,
     "CAPITAL_CHECK_MAX_RATIO": 1.10,
-    "DEEP_FILL_STAGE":         8,
-    "TIMEOUT_BARS_AFTER_DEEP": 12,
+    "DEEP_FILL_STAGE":         99,     # v9.1: TIMEOUT 사실상 제거
+    "TIMEOUT_BARS_AFTER_DEEP": 99999,  # v9.1: TIMEOUT 사실상 제거
 
     "REENTRY_COOLDOWN_BARS":      8,
     "POLL_INTERVAL_SEC":          10,
@@ -319,23 +352,19 @@ def check_4h_short_filter(symbol: str, cache: BarCache) -> bool:
 
 
 # ============================================================
-# 5M EMA15 역전 트리거 v9.2
+# 5M EMA15 역전 트리거
 # ============================================================
 
 def _compute_5m_trigger(closes: list, highs: list) -> bool:
     period = CFG["EMA_TRIGGER_LEN"]
     if len(closes) < period + 2 or len(highs) < period + 2:
         return False
-
-    ema_s = calc_ema(closes, period)
-
+    ema_s   = calc_ema(closes, period)
     cond1   = closes[-1] < ema_s[-1]
     cond2   = highs[-2]  > ema_s[-2]
     cond2_b = highs[-1]  < ema_s[-1] * 1.003
     cond3   = closes[-1] < closes[-2]
-
     triggered = cond1 and cond2 and cond2_b and cond3
-
     if triggered:
         log.info(
             f"[5M TRIGGER V8.2] EMA 이탈 + 고가 억제(0.3%) + 1봉 하락 | "
@@ -478,10 +507,7 @@ def place_stop_limit_sl(symbol: str, stop_price: float, limit_price: float, qty:
         return None
     try:
         order = client.new_order(
-            symbol=symbol,
-            side="BUY",
-            type="STOP",
-            timeInForce="GTC",
+            symbol=symbol, side="BUY", type="STOP", timeInForce="GTC",
             stopPrice=fmt_price(stop_price, symbol),
             price=fmt_price(limit_price, symbol),
             quantity=fmt_qty(qty, symbol),
@@ -489,8 +515,7 @@ def place_stop_limit_sl(symbol: str, stop_price: float, limit_price: float, qty:
         )
         log.info(
             f"[EXIT/SL] BUY SL STOP_LIMIT stopPrice={fmt_price(stop_price, symbol)} "
-            f"price={fmt_price(limit_price, symbol)} qty={fmt_qty(qty, symbol)} "
-            f"reduceOnly=True mode=FULL_LADDER_AVG_BASED_STATIC"
+            f"price={fmt_price(limit_price, symbol)} qty={fmt_qty(qty, symbol)} reduceOnly=True"
         )
         return order
     except ClientError as e:
@@ -523,7 +548,7 @@ def set_leverage(symbol: str, leverage: int):
         log.warning(f"레버리지 설정 오류: {e}")
 
 
-# [BUG 3 수정] 예외 문자열 폭넓게 처리
+# BUG3 유지: 예외 문자열 폭넓게 처리
 def set_margin_type(symbol: str, margin_type: str):
     try:
         mt = "CROSSED" if margin_type.upper() == "CROSS" else "ISOLATED"
@@ -531,10 +556,8 @@ def set_margin_type(symbol: str, margin_type: str):
         log.info(f"마진 타입 {mt} 설정 완료")
     except ClientError as e:
         msg = str(e).lower()
-        # 이미 설정된 상태 — 정상
         if "no need to change" in msg:
             log.info(f"마진 타입 이미 설정된 상태 ({mt})")
-        # 포지션 또는 주문 존재로 변경 불가 — 경고 후 계속
         elif (
             "cannot be changed" in msg
             or "open orders" in msg
@@ -669,8 +692,7 @@ class RangeShortEngine:
         self._htf_cache     = BarCache(min_interval_sec=min_iv)
         self._trigger_cache = BarCache(min_interval_sec=min_iv)
 
-        # [BUG 1 수정] __init__에서 심볼 필터만 로드
-        # margin/leverage 설정은 run()에서 _sync_on_start() 이후 호출
+        # BUG1 유지: __init__에서 심볼 필터만 로드
         load_symbol_filters(self.symbol)
 
     # --------------------------------------------------------
@@ -678,9 +700,9 @@ class RangeShortEngine:
     # --------------------------------------------------------
     def _safe_cancel(self, order_id: int) -> bool:
         if order_id in self._filled_order_ids:
-            return True   # 체결된 주문은 이미 없음 → 성공으로 간주
+            return True
         if order_id in self._canceled_order_ids:
-            return True   # 이미 취소됨 → 성공으로 간주
+            return True
         success = cancel_order(self.symbol, order_id)
         if success:
             self._canceled_order_ids.add(order_id)
@@ -715,10 +737,9 @@ class RangeShortEngine:
             cancelled = self._safe_cancel(self.sl_order_id)
             if not cancelled:
                 log.warning(
-                    f"[SL RESET] 기존 SL cancel 실패 | orderId={self.sl_order_id} "
-                    f"→ 새 SL로 교체 진행 (거래소에서 이미 체결/만료됐을 가능성)"
+                    f"[SL RESET] 기존 SL cancel 실패 | orderId={self.sl_order_id} → 새 SL로 교체 진행"
                 )
-            self.sl_order_id = None  # 성공/실패 무관하게 참조 초기화 후 새 SL 배치
+            self.sl_order_id = None
 
         time.sleep(0.05)
 
@@ -735,8 +756,7 @@ class RangeShortEngine:
         if order:
             self.sl_order_id = int(order["orderId"])
             log.info(
-                f"[SL ORDER] mode=FULL_LADDER_AVG_BASED_STATIC "
-                f"stopPrice={fmt_price(stop_price, self.symbol)} "
+                f"[SL ORDER] stopPrice={fmt_price(stop_price, self.symbol)} "
                 f"price={fmt_price(limit_price, self.symbol)} "
                 f"qty={fmt_qty(abs(new_qty), self.symbol)} reduceOnly=True"
             )
@@ -768,9 +788,7 @@ class RangeShortEngine:
         ]
 
     # --------------------------------------------------------
-    # [BUG 1 수정] run()에서 _sync_on_start() 먼저, 그 후 margin/leverage
-    # [BUG 2 수정] SL 누적 — 나머지 sl_orders 전부 cancel
-    # [BUG 5 수정] LADDER_ACTIVE 복구 시 avg_full/sl_price 재계산
+    # 재시작 동기화
     # --------------------------------------------------------
     def _sync_on_start(self):
         pos         = get_position(self.symbol)
@@ -823,9 +841,8 @@ class RangeShortEngine:
             self.tp1_done  = True
             self.trail_low = None
 
-            # [BUG 2 수정] SL 복구 — 0번째만 채택, 나머지 전부 cancel
+            # BUG2 유지: SL 복구 — 0번째만 채택, 나머지 전부 cancel
             if sl_orders:
-                # 유효한 SL 1개 선택 (stopPrice 기준 가장 낮은 것 = 최초 배치)
                 sl_orders_sorted = sorted(
                     sl_orders,
                     key=lambda x: float(x.get("stopPrice", x.get("price", 0)))
@@ -833,29 +850,24 @@ class RangeShortEngine:
                 sl_o = sl_orders_sorted[0]
                 self.sl_order_id = int(sl_o["orderId"])
                 self.sl_price    = float(sl_o.get("stopPrice", sl_o.get("price", 0)))
-                log.info(
-                    f"[SYNC] SL 복구 | orderId={self.sl_order_id} "
-                    f"stopPrice={self.sl_price}"
-                )
+                log.info(f"[SYNC] SL 복구 | orderId={self.sl_order_id} stopPrice={self.sl_price}")
 
-                # 나머지 SL 전부 즉시 취소
                 for extra_sl in sl_orders_sorted[1:]:
                     eid = int(extra_sl["orderId"])
-                    log.warning(
-                        f"[SYNC] 잉여 SL 취소 | orderId={eid} "
-                        f"stopPrice={extra_sl.get('stopPrice')} qty={extra_sl.get('origQty')}"
-                    )
+                    log.warning(f"[SYNC] 잉여 SL 취소 | orderId={eid}")
                     cancel_order(self.symbol, eid)
                     self._canceled_order_ids.add(eid)
             else:
-                log.critical("[SYNC FAIL] 포지션 있음 + SL 주문 없음 → 엔진 중단")
-                raise RuntimeError("SL BASE LOST")
+                # v9.2: SL 없음 = 정상 상태 (1~9단 구간은 거래소 SL 없음)
+                log.info("[SYNC] SL 없음 → 정상 상태 (10단 미도달)")
+                self.sl_order_id = None
+                self.sl_price    = None
 
             log.info(
                 f"[SYNC] 복구 완료 | avg={pos['avg_price']} | "
                 f"SELL {len(sell_sorted)}개 | BUY exit {len(buy_normal)}개 | "
                 f"SL 채택 1개 / 취소 {len(sl_orders)-1}개 | "
-                f"max_filled_stage={self.max_filled_stage} | tp1_done=True trail_low=None"
+                f"max_filled_stage={self.max_filled_stage}"
             )
 
         elif sell_sorted:
@@ -869,53 +881,38 @@ class RangeShortEngine:
                     "qty":      float(o["origQty"]),
                 })
             self.entry_price_base = float(sell_sorted[0]["price"])
-            log.info(f"[SYNC] entry_price_base = {self.entry_price_base:.4f} (min SELL price)")
+            log.info(f"[SYNC] entry_price_base = {self.entry_price_base:.4f}")
 
-            # [BUG 5 수정] avg_full / sl_price 재계산
+            # BUG5 유지: avg_full / sl_price 재계산
             recovered_prices = [float(o["price"]) for o in sell_sorted]
             recovered_qtys   = [float(o["origQty"]) for o in sell_sorted]
             if recovered_prices and recovered_qtys:
                 self.avg_full = calc_avg_full(recovered_prices, recovered_qtys)
                 self.sl_price = self.avg_full * (1 + CFG["HARD_SL_PCT"])
-                log.info(
-                    f"[SYNC] avg_full 재계산 | avg_full={self.avg_full:.6f} "
-                    f"sl_price={self.sl_price:.6f}"
-                )
+                log.info(f"[SYNC] avg_full 재계산 | avg_full={self.avg_full:.6f} sl_price={self.sl_price:.6f}")
 
-            # 고아 SL 처리
-            if sl_orders:
-                for sl_o in sl_orders:
-                    log.warning(
-                        f"[ORPHAN SL] 포지션 없음 + SL 잔존 → 취소 | "
-                        f"orderId={sl_o['orderId']} stopPrice={sl_o.get('stopPrice')} "
-                        f"price={sl_o.get('price')} qty={sl_o.get('origQty')}"
-                    )
-                    cancel_order(self.symbol, int(sl_o["orderId"]))
+            for sl_o in sl_orders:
+                log.warning(f"[ORPHAN SL] 포지션 없음 → 취소 | orderId={sl_o['orderId']}")
+                cancel_order(self.symbol, int(sl_o["orderId"]))
 
         else:
             log.info("[SYNC] 포지션 없음 + 주문 없음 → WATCHING 시작")
             self.state = "WATCHING"
 
-            if sl_orders:
-                for sl_o in sl_orders:
-                    log.warning(
-                        f"[ORPHAN SL] 포지션 없음 + SL 잔존 → 취소 | "
-                        f"orderId={sl_o['orderId']} stopPrice={sl_o.get('stopPrice')} "
-                        f"price={sl_o.get('price')} qty={sl_o.get('origQty')}"
-                    )
-                    cancel_order(self.symbol, int(sl_o["orderId"]))
+            for sl_o in sl_orders:
+                log.warning(f"[ORPHAN SL] 포지션 없음 → 취소 | orderId={sl_o['orderId']}")
+                cancel_order(self.symbol, int(sl_o["orderId"]))
 
     # --------------------------------------------------------
-    # 메인 루프 — [BUG 1 수정] _sync_on_start() 먼저, margin/leverage 후순위
+    # 메인 루프 — BUG1 유지: _sync_on_start() 먼저, margin/leverage 후순위
     # --------------------------------------------------------
     def run(self):
         log.info("=" * 60)
-        log.info("VELLA RANGE SHORT LADDER v9 (BUG PATCH 5) 시작")
+        log.info("VELLA RANGE SHORT LADDER v9.2 시작")
         log.info(f"심볼: {self.symbol} | 자본: {CFG['TOTAL_CAPITAL_USDT']} USDT | 레버: {CFG['LEVERAGE']}x")
-        log.info(f"[HARD SL MODE] engine-side backup + exchange STOP_LIMIT reduceOnly")
+        log.info(f"GAP: {CFG['LADDER_GAP_PCT']*100:.0f}% | HARD_SL: {CFG['HARD_SL_PCT']*100:.0f}%(10단 후)")
         log.info("=" * 60)
 
-        # [BUG 1 수정] 포지션/주문 상태 먼저 확인 후 설정 변경
         self._sync_on_start()
         set_margin_type(self.symbol, CFG["MARGIN_TYPE"])
         set_leverage(self.symbol, CFG["LEVERAGE"])
@@ -979,12 +976,11 @@ class RangeShortEngine:
                 self.no_fill_bars       = 0
                 self._last_position_amt = pos["amt"]
 
-                # [BUG 4 수정] LADDER_ACTIVE→POSITION_HOLD 전환 시 SL 미배치 체크
-                # sl_price는 있으나 sl_order_id가 없는 경우 즉시 배치
-                if self.sl_price is not None and self.sl_order_id is None:
-                    log.warning(
-                        "[BUG4 GUARD] POSITION_HOLD 진입 시 SL 미배치 감지 → 즉시 배치"
-                    )
+                # BUG4 유지: SL 미배치 가드 — 단, 10단 완료 후에만
+                if (self.sl_price is not None
+                        and self.sl_order_id is None
+                        and self.max_filled_stage >= CFG["LADDER_COUNT"]):
+                    log.warning("[BUG4 GUARD] POSITION_HOLD 진입 시 SL 미배치 + 10단 완료 → 즉시 배치")
                     self._reset_sl_order(new_qty=pos["amt"])
                 return
 
@@ -998,13 +994,7 @@ class RangeShortEngine:
                 self.state = "WATCHING"
                 return
 
-            if self._is_ladder_invalid(current_price):
-                log.warning("거미줄 무효화: 상단 이탈 → SELL 취소 후 WATCHING")
-                self._cancel_ladder_orders()
-                self._reset_ladder()
-                self.state = "WATCHING"
-                return
-
+            # v9.1: LADDER INVALIDATION 완전 비활성화
             log.info(f"거미줄 대기 | 현재가: {current_price:.4f}")
             return
 
@@ -1018,7 +1008,7 @@ class RangeShortEngine:
                 if self.sl_order_id is not None:
                     cancelled = self._safe_cancel(self.sl_order_id)
                     if not cancelled:
-                        log.warning(f"[SL CANCEL] 포지션 청산 후 SL cancel 실패 | orderId={self.sl_order_id} → 무시 후 쿨다운")
+                        log.warning(f"[SL CANCEL] 포지션 청산 후 SL cancel 실패 | orderId={self.sl_order_id}")
                     self.sl_order_id = None
                 self._start_cooldown()
                 return
@@ -1042,24 +1032,20 @@ class RangeShortEngine:
                 self._last_filled_check_ts = cur_bar_ts
 
                 pending_sell = self._get_pending_sell()
-                stage1_only  = (self.max_filled_stage == 1 and len(pending_sell) > 0)
-
                 log.info(
                     f"[POSITION STATUS] "
-                    f"stage1_only={stage1_only} | "
                     f"pending_sell_count={len(pending_sell)} | "
                     f"max_filled_stage={self.max_filled_stage} | "
                     f"sl_order_id={self.sl_order_id} | "
                     f"sl_price={self.sl_price}"
                 )
 
-                if amt_changed and self.sl_price is not None:
+                # v9.1: SL 재설정 — 10단 완료 후에만
+                if (amt_changed and self.sl_price is not None
+                        and self.max_filled_stage >= CFG["LADDER_COUNT"]):
                     self._reset_sl_order(new_qty=position_qty)
 
-                if pending_sell and self._is_ladder_invalid(current_price):
-                    log.warning("[POSITION_HOLD] 거미줄 상단 이탈 → pending SELL 취소")
-                    for o in pending_sell:
-                        self._safe_cancel(o["order_id"])
+                # v9.1: POSITION_HOLD 내 INVALIDATION 체크 완전 제거
 
             log.info(
                 f"HOLD | avg={avg_price:.4f} | price={current_price:.4f} | "
@@ -1071,16 +1057,16 @@ class RangeShortEngine:
 
             pnl_pct = (avg_price - current_price) / avg_price
 
-            # 1. HARD SL (엔진 내부 백업)
-            if pnl_pct < -CFG["HARD_SL_PCT"]:
+            # 1. HARD SL 엔진 내부 백업 — v9.1: 10단 체결 완료 후에만 발동
+            if (self.max_filled_stage >= CFG["LADDER_COUNT"]
+                    and pnl_pct < -CFG["HARD_SL_PCT"]):
                 log.warning(
-                    f"[HARD SL] engine-side 발동 | 손실 {pnl_pct*100:.2f}% | "
-                    f"거래소 SL이 미작동한 경우"
+                    f"[HARD SL] engine-side 발동 | 10단 완료 후 손실 {pnl_pct*100:.2f}%"
                 )
                 self._final_close(symbol, position_qty, "HARD_SL")
                 return
 
-            # 2. TIMEOUT
+            # 2. TIMEOUT — v9.1: 사실상 비활성 (DEEP_FILL_STAGE=99)
             if self.max_filled_stage >= CFG["DEEP_FILL_STAGE"]:
                 if new_bar:
                     self.bars_after_deep += 1
@@ -1111,7 +1097,8 @@ class RangeShortEngine:
                 return
 
             # 5. 지정가 EXIT 동기화
-            if not self._closing_in_progress:
+            # v9.1: 2단 이상 체결 후에만 EXIT 생성
+            if not self._closing_in_progress and self.max_filled_stage >= 2:
                 self._sync_exit_order(symbol, avg_price, position_qty)
 
     # --------------------------------------------------------
@@ -1133,17 +1120,19 @@ class RangeShortEngine:
             self._cancel_ladder_orders()
             self.ladder_orders     = []
             self._filled_order_ids = set()
-            self.max_filled_stage  = 0
+            # v9.1 B1: max_filled_stage 유지 — stage 기반 EXIT 정확도 보존
 
             self._last_position_amt = pos["amt"]
             self.tp1_done  = True
             self.trail_low = None
 
-            self._reset_sl_order(new_qty=pos["amt"])
+            # v9.1: TP1 후 SL 재설정 — 10단 완료 후에만
+            if self.max_filled_stage >= CFG["LADDER_COUNT"]:
+                self._reset_sl_order(new_qty=pos["amt"])
 
             log.info(
                 f"[TP1] 부분청산 성공 → tp1_done=True | "
-                f"잔량={pos['amt']:.4f} | trail_low=None(다음 tick 세팅)"
+                f"잔량={pos['amt']:.4f} | stage={self.max_filled_stage} 유지"
             )
         else:
             log.error("[TP1] 부분청산 실패 → 기존 주문 유지, 다음 tick 재시도")
@@ -1157,13 +1146,12 @@ class RangeShortEngine:
 
         self.cancel_buy_exit_orders(self.exit_order_ids)
         self.exit_order_ids = []
-
         self._cancel_ladder_orders()
 
         if self.sl_order_id is not None:
             cancelled = self._safe_cancel(self.sl_order_id)
             if not cancelled:
-                log.warning(f"[SL CANCEL] FINAL CLOSE 중 SL cancel 실패 | orderId={self.sl_order_id} → 시장가 청산으로 진행")
+                log.warning(f"[SL CANCEL] FINAL CLOSE 중 SL cancel 실패 | orderId={self.sl_order_id}")
             self.sl_order_id = None
 
         success = market_close_short(symbol, abs(position_qty))
@@ -1181,37 +1169,37 @@ class RangeShortEngine:
     # 거미줄 배치
     # --------------------------------------------------------
     def _deploy_ladder(self, current_price: float):
+        # v9.1 B2: 중복 진입 차단
+        if self.state != "WATCHING":
+            log.warning(f"_deploy_ladder 차단: state={self.state} (WATCHING 아님)")
+            return
+
         symbol  = self.symbol
         count   = CFG["LADDER_COUNT"]
         gap     = CFG["LADDER_GAP_PCT"]
         weights = normalize_weights(CFG["SIZE_WEIGHTS"], count)
         prices  = build_ladder_prices(current_price, count, gap)
-
-        qtys = calc_ladder_quantities_per_stage(
+        qtys    = calc_ladder_quantities_per_stage(
             CFG["TOTAL_CAPITAL_USDT"], CFG["LEVERAGE"], weights, prices, current_price
         )
 
-        effective_capital    = CFG["TOTAL_CAPITAL_USDT"] * CFG["MAX_CAPITAL_RATIO"] * CFG["LEVERAGE"]
-        market_1_notional    = current_price * qtys[0]
-        limit_notional_sum   = sum(prices[i] * qtys[i] for i in range(1, count))
-        total_planned        = market_1_notional + limit_notional_sum
-        ratio                = total_planned / effective_capital
+        # CAPITAL CHECK
+        effective_capital  = CFG["TOTAL_CAPITAL_USDT"] * CFG["MAX_CAPITAL_RATIO"] * CFG["LEVERAGE"]
+        total_planned      = current_price * qtys[0] + sum(prices[i] * qtys[i] for i in range(1, count))
+        ratio              = total_planned / effective_capital
 
         log.info(
             f"[CAPITAL CHECK] planned={total_planned:.2f} effective={effective_capital:.2f} "
-            f"ratio={ratio:.3f} min={CFG['CAPITAL_CHECK_MIN_RATIO']} max={CFG['CAPITAL_CHECK_MAX_RATIO']}"
+            f"ratio={ratio:.3f}"
         )
-
         if not (CFG["CAPITAL_CHECK_MIN_RATIO"] <= ratio <= CFG["CAPITAL_CHECK_MAX_RATIO"]):
-            log.error(f"[CAPITAL CHECK] 범위 이탈 ratio={ratio:.3f} → 거미줄 배치 중단")
+            log.error(f"[CAPITAL CHECK] 범위 이탈 ratio={ratio:.3f} → 배치 중단")
             return
 
+        # 숏 안전밸브
         for i in range(1, count):
             if prices[i] < current_price * 0.999:
-                log.error(
-                    f"[SHORT SAFETY] stage={i+1} price={prices[i]:.4f} < "
-                    f"current*0.999={current_price*0.999:.4f} → 거미줄 배치 중단"
-                )
+                log.error(f"[SHORT SAFETY] stage={i+1} price={prices[i]:.4f} → 배치 중단")
                 return
 
         cancel_all_orders(symbol)
@@ -1223,11 +1211,9 @@ class RangeShortEngine:
         self.sl_price = self.avg_full * (1 + CFG["HARD_SL_PCT"])
 
         log.info(
-            f"[EXPECTED FULL AVG] avg_full={self.avg_full:.6f} "
-            f"total_qty_full={sum(qtys):.2f} "
-            f"total_notional_full={sum(p*q for p,q in zip(all_prices,qtys)):.2f}"
+            f"[EXPECTED FULL AVG] avg_full={self.avg_full:.6f} sl_price={self.sl_price:.6f}"
         )
-        log.info(f"거미줄 배치 | 기준가: {current_price:.4f} | {count}단계")
+        log.info(f"거미줄 배치 | 기준가: {current_price:.4f} | {count}단계 | GAP={gap*100:.0f}%")
 
         success   = 0
         order_1st = None
@@ -1264,11 +1250,13 @@ class RangeShortEngine:
             self.state = "WATCHING"
             return
 
-        log.info(f"거미줄 배치 완료: {success}/{count}개")
+        log.info(f"거미줄 배치 완료: {success}/{count}개 → LADDER_ACTIVE")
         self.no_fill_bars = 0
-        self.state = "POSITION_HOLD" if order_1st else "LADDER_ACTIVE"
+        # v9.1 B4: LADDER_ACTIVE 고정 — POSITION_HOLD 직행 금지
+        self.state = "LADDER_ACTIVE"
 
-        if order_1st:
+        # v9.1: 거래소 SL 배치 — 10단 완료 후에만
+        if order_1st and self.max_filled_stage >= CFG["LADDER_COUNT"]:
             pos_now = get_position(symbol)
             if self.avg_full is not None and pos_now["avg_price"] > 0:
                 log.info(
@@ -1276,13 +1264,12 @@ class RangeShortEngine:
                     f"vs real_avg={pos_now['avg_price']:.6f}"
                 )
             self._reset_sl_order(new_qty=pos_now["amt"])
-        # [BUG 4 수정] 1차 실패 → LADDER_ACTIVE 진입 시 sl_price는 이미 세팅됨
-        # LADDER_ACTIVE→POSITION_HOLD 전환 시 _tick() 내 BUG4 GUARD가 처리
 
     # --------------------------------------------------------
-    # 거미줄 무효화
+    # 거미줄 무효화 (비활성화됨 — 참조용 유지)
     # --------------------------------------------------------
     def _is_ladder_invalid(self, current_price: float) -> bool:
+        # v9.1: 전략 철학상 호출되지 않음
         if not self.entry_price_base or not self.ladder_orders:
             return False
         top_price  = self.ladder_orders[-1]["price"]
@@ -1298,11 +1285,14 @@ class RangeShortEngine:
         exit_qty   = abs(position_qty)
         threshold  = CFG["EXIT_REPRICE_THRESHOLD_PCT"]
 
+        # v9.1 B5: 비교 기준 이전값(last_*)으로 통일
         need_replace = (
             not self.exit_order_ids
             or stage != self.last_stage
-            or abs(exit_price - self.last_exit_price) > exit_price * threshold
-            or abs(exit_qty   - self.last_exit_qty)   > exit_qty   * 0.05
+            or (self.last_exit_price > 0
+                and abs(exit_price - self.last_exit_price) > self.last_exit_price * threshold)
+            or (self.last_exit_qty > 0
+                and abs(exit_qty - self.last_exit_qty) > self.last_exit_qty * 0.05)
         )
 
         if not need_replace:
