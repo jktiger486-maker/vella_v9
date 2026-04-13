@@ -1,6 +1,6 @@
 """
 ============================================================
-VELLA RANGE SHORT LADDER v9.2 (BR9 기준선 — SL 없음 정상 처리 패치)
+VELLA RANGE SHORT LADDER v9.3 (BR9 기준선 — 시작 시 과거 신호 재진입 방지)
 ============================================================
 
 [v9.1 패치 내역 — BR10/BR8.7 기준 정렬]
@@ -908,7 +908,7 @@ class RangeShortEngine:
     # --------------------------------------------------------
     def run(self):
         log.info("=" * 60)
-        log.info("VELLA RANGE SHORT LADDER v9.2 시작")
+        log.info("VELLA RANGE SHORT LADDER v9.3 시작")
         log.info(f"심볼: {self.symbol} | 자본: {CFG['TOTAL_CAPITAL_USDT']} USDT | 레버: {CFG['LEVERAGE']}x")
         log.info(f"GAP: {CFG['LADDER_GAP_PCT']*100:.0f}% | HARD_SL: {CFG['HARD_SL_PCT']*100:.0f}%(10단 후)")
         log.info("=" * 60)
@@ -916,6 +916,12 @@ class RangeShortEngine:
         self._sync_on_start()
         set_margin_type(self.symbol, CFG["MARGIN_TYPE"])
         set_leverage(self.symbol, CFG["LEVERAGE"])
+
+        # v9.3: 시작 시 현재 봉 ts 세팅 → 첫 tick 과거 신호 재진입 방지
+        # (BarCache 초기화 상태에서 이미 지나간 트리거 봉을 새 신호로 오인하는 버그 차단)
+        _, bar_ts = calc_ema15_trigger(self.symbol, self._trigger_cache)
+        self.last_trigger_bar_ts = bar_ts
+        log.info(f"[INIT] 시작 봉 ts 세팅 완료: last_trigger_bar_ts={bar_ts}")
 
         while True:
             try:
