@@ -4,7 +4,7 @@ VELLA RANGE SHORT LADDER v8.9 (deep trail 패치)
 ============================================================
 
 [v8.9 패치 내역 — 클로 작성]
-1. 종목 변경: TIAUSDT → XRPUSDT
+1. 종목 변경: TIAUSDT → APTUSDT
 2. GAP 변경: 5% → 6% (절대 손절 안 나는 구조)
 3. HARD_SL_PCT 유지: 5% (10단 완료 후 엔진 발동)
 
@@ -80,7 +80,7 @@ ClientError = (BinanceAPIException, BinanceOrderException)
 # ============================================================
 CFG = {
     # ── 10번대: 심볼 / 시간축 ──────────────────────────────
-    "SYMBOL":              "XRPUSDT",       
+    "SYMBOL":              "APTUSDT",       
     "INTERVAL_TRIGGER":    "5m",
     "INTERVAL_EXEC":       "5m",
     "INTERVAL_FILTER_HTF": "4h",
@@ -149,7 +149,7 @@ logging.basicConfig(
         logging.FileHandler("vella_range_short_v8_9.log", encoding="utf-8"),
     ]
 )
-log = logging.getLogger("VELLA_BR8_XRP")
+log = logging.getLogger("VELLA_BR8_APT")
 
 # ============================================================
 # 클라이언트
@@ -852,7 +852,7 @@ class RangeShortEngine:
     # --------------------------------------------------------
     def run(self):
         log.info("=" * 60)
-        log.info("VELLA RANGE SHORT LADDER v8.9 (XRP) 시작")
+        log.info("VELLA RANGE SHORT LADDER v8.9 (APT) 시작")
         log.info(f"심볼: {self.symbol} | 자본: {CFG['TOTAL_CAPITAL_USDT']} USDT | 레버: {CFG['LEVERAGE']}x")
         log.info(f"GAP: {CFG['LADDER_GAP_PCT']*100:.0f}% | HARD_SL: {CFG['HARD_SL_PCT']*100:.0f}%(10단 후 엔진)")
         log.info(f"DEEP TRAIL: {CFG['STAGE_TRAILING_FROM']}단 이상 | "
